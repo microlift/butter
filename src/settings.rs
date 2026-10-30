@@ -17,6 +17,9 @@ pub struct Settings {
     pub default_runner: Option<String>,
     /// How runners are compiled.
     pub build_profile: BuildProfile,
+    /// Whether Butter has looked for a system install of Rosemary, which it
+    /// does once, on first launch.
+    pub checked_system_runner: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +58,7 @@ impl Default for Settings {
             keep_build_cache: true,
             default_runner: None,
             build_profile: BuildProfile::default(),
+            checked_system_runner: false,
         }
     }
 }
