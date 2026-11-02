@@ -25,6 +25,7 @@ pub enum Kind {
     Binary,
     /// A `rosemary` binary the user pointed Butter at, such as their own build.
     Custom,
+    System,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +74,7 @@ impl Runner {
             },
             Kind::Binary => "Official build".to_string(),
             Kind::Custom => format!("Custom · {}", self.executable().display()),
+            Kind::System => "System install".to_string(), // TODO: compare git hash with latest upstream release
         });
         if let Some(profile) = &self.info.profile {
             parts.push(profile.clone());
@@ -212,6 +214,73 @@ pub fn add_custom(name: &str, executable: &Path) -> anyhow::Result<Runner> {
     };
     save(&dir, &info)?;
     Ok(Runner { id, dir, info })
+}
+
+pub fn add_system(name: &str, executable: &Path) -> anyhow::Result<Runner> {
+    if !executable.is_file() {
+        bail!("{} is not a file", executable.display());
+    }
+    let name = name.trim();
+    let name = if name.is_empty() {
+        "Rosemary (system install)"
+    } else {
+        name
+    };
+    let mut id = format!("custom-{}", util::slugify(name));
+    let base = id.clone();
+    let mut n = 2;
+    while Paths::get().runners().join(&id).exists() {
+        id = format!("{base}-{n}");
+        n += 1;
+    }
+    let dir = Paths::get().runners().join(&id);
+    let (tag, commit) = reported_version(executable);
+    let info = Info {
+        name: match tag {
+            None => name.to_string(),
+            Some(ref tag) => format!("Rosemary {} (system install)", tag.trim_start_matches('v')),
+        },
+        kind: Kind::System,
+        tag,
+        commit,
+        executable: executable.to_path_buf(),
+        installed: util::now(),
+        rustc: None,
+        profile: None,
+    };
+    save(&dir, &info)?;
+    Ok(Runner { id, dir, info })
+}
+
+/// The release tag and commit a `rosemary` binary reports, as far as it
+/// reports them.
+fn reported_version(executable: &Path) -> (Option<String>, Option<String>) {
+    match Command::new(executable).arg("--version").output() {
+        Ok(output) if output.status.success() => {
+            parse_version(&String::from_utf8_lossy(&output.stdout))
+        }
+        _ => (None, None),
+    }
+}
+
+/// Parse `rosemary --version`: `rosemary 0.4.1`, then `commit: fd018c65`
+/// from builds that know their commit. The version comes back as its release
+/// tag, `v0.4.1`.
+fn parse_version(text: &str) -> (Option<String>, Option<String>) {
+    let mut lines = text.lines();
+    let tag = lines
+        .next()
+        .and_then(|l| l.trim().strip_prefix("rosemary "))
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| format!("v{}", v.trim_start_matches('v')));
+    // Builds made outside a git checkout print nothing or `unknown`.
+    let commit = lines
+        .find_map(|l| l.trim().strip_prefix("commit:"))
+        .map(str::trim)
+        .filter(|c| !c.is_empty() && c.chars().all(|ch| ch.is_ascii_hexdigit()))
+        .map(str::to_string);
+    (tag, commit)
 }
 
 /// Download `url` to `dest`, reporting progress.
@@ -705,6 +774,29 @@ mod tests {
         assert_eq!(target.name, "Rosemary dev 0123456");
         assert!(target.tag.is_none());
         assert_eq!(Target::release("v0.2.0").id, "rosemary-v0.2.0");
+    }
+
+    #[test]
+    fn parses_version() {
+        let text = "rosemary 0.4.1\ncommit: fd018c65\nbuilt:  2026-10-30\n";
+        assert_eq!(
+            parse_version(text),
+            (Some("v0.4.1".into()), Some("fd018c65".into()))
+        );
+        // Built outside git, or by a release that prints only its version.
+        assert_eq!(
+            parse_version("rosemary 0.4.1\ncommit: unknown\nbuilt:  unknown\n"),
+            (Some("v0.4.1".into()), None)
+        );
+        assert_eq!(
+            parse_version("rosemary 0.4.1\ncommit: \n"),
+            (Some("v0.4.1".into()), None)
+        );
+        assert_eq!(
+            parse_version("rosemary 0.2.0\n"),
+            (Some("v0.2.0".into()), None)
+        );
+        assert_eq!(parse_version("something else\n"), (None, None));
     }
 }
 

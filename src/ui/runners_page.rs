@@ -67,8 +67,12 @@ impl RunnersPage {
         page.add(&toolchain_group);
 
         let installed_group = adw::PreferencesGroup::builder().title("Installed").build();
+        let installed_header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let detect_system = ui::icon_button("system-search-symbolic", "Detect System Installs");
         let add_custom = ui::icon_button("list-add-symbolic", "Add a Rosemary Build…");
-        installed_group.set_header_suffix(Some(&add_custom));
+        installed_header.append(&detect_system);
+        installed_header.append(&add_custom);
+        installed_group.set_header_suffix(Some(&installed_header));
         let installed = ui::boxed_list();
         installed_group.add(&installed);
         page.add(&installed_group);
@@ -140,12 +144,22 @@ impl RunnersPage {
             }
         });
         let weak = Rc::downgrade(&this.0);
+        detect_system.connect_clicked(move |_| {
+            if let Some(inner) = weak.upgrade() {
+                RunnersPage(inner).detect_system(false);
+            }
+        });
+        let weak = Rc::downgrade(&this.0);
         add_custom.connect_clicked(move |_| {
             if let Some(inner) = weak.upgrade() {
                 RunnersPage(inner).add_custom();
             }
         });
 
+        if !window.settings().checked_system_runner {
+            window.update_settings(|s| s.checked_system_runner = true);
+            this.detect_system(true);
+        }
         this.refresh_toolchain();
         this.refresh_releases(false);
         // Goes to GitHub only if the saved list is over 12 hours old.
@@ -286,6 +300,7 @@ impl RunnersPage {
                 Kind::Source => "system-run-symbolic",
                 Kind::Binary => "package-x-generic-symbolic",
                 Kind::Custom => "application-x-executable-symbolic",
+                Kind::System => "application-x-executable-symbolic",
             }));
             if default.as_deref() == Some(r.id.as_str()) {
                 let badge = gtk::Label::new(Some("Default"));
@@ -331,6 +346,9 @@ impl RunnersPage {
                 .map(|b| b.config.name)
                 .collect();
             let body = match (r.info.kind, users.is_empty()) {
+                (Kind::System, true) => {
+                    "Butter will forget this runner. The binary itself is not deleted.".to_string()
+                }
                 (Kind::Custom, true) => {
                     "Butter will forget this runner. The binary itself is not deleted.".to_string()
                 }
@@ -409,6 +427,59 @@ impl RunnersPage {
                     }
                     window.refresh();
                 }
+                Err(e) => window.error(format!("Could not add the runner: {e}")),
+            }
+        });
+    }
+
+    /// Look for `rosemary` on the PATH and add it as a runner. When `quiet`,
+    /// as on first launch, finding nothing new says nothing.
+    fn detect_system(&self, quiet: bool) {
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let window = this.window().clone();
+            let found = background(|| {
+                let path = which::which_global("rosemary").ok()?;
+                // Compared through symbolic links, so a binary already added
+                // by another path is not added twice.
+                let real = path.canonicalize().unwrap_or_else(|_| path.clone());
+                let known = runner::installed()
+                    .iter()
+                    .any(|r| r.executable().canonicalize().is_ok_and(|e| e == real));
+                Some((path, known))
+            })
+            .await;
+            let path = match found {
+                Some((path, false)) => path,
+                Some((path, true)) => {
+                    if !quiet {
+                        window.notify(&format!("{} is already a runner", path.display()));
+                    }
+                    return;
+                }
+                None => {
+                    if !quiet {
+                        window.notify("No system install of Rosemary was found");
+                    }
+                    return;
+                }
+            };
+            // An empty name takes add_system's default. It runs the binary to
+            // ask its version, so off the main thread.
+            let added = background({
+                let path = path.clone();
+                move || runner::add_system("", &path)
+            })
+            .await;
+            match added {
+                Ok(r) => {
+                    if window.settings().default_runner.is_none() {
+                        window.update_settings(|s| s.default_runner = Some(r.id.clone()));
+                    }
+                    window.refresh();
+                    window.notify(&format!("Found Rosemary at {}", path.display()));
+                }
+                Err(e) if quiet => eprintln!("butter: could not add {}: {e}", path.display()),
                 Err(e) => window.error(format!("Could not add the runner: {e}")),
             }
         });
