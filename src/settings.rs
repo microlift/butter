@@ -20,6 +20,9 @@ pub struct Settings {
     /// Whether Butter has looked for a system install of Rosemary, which it
     /// does once, on first launch.
     pub checked_system_runner: bool,
+    /// Whether the Getting Started tour has been offered, which it is once,
+    /// on first launch.
+    pub tutorial_seen: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +62,7 @@ impl Default for Settings {
             default_runner: None,
             build_profile: BuildProfile::default(),
             checked_system_runner: false,
+            tutorial_seen: false,
         }
     }
 }

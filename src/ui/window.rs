@@ -83,6 +83,7 @@ impl Window {
         let menu = gio::Menu::new();
         menu.append(Some("_Preferences"), Some("win.preferences"));
         menu.append(Some("_Keyboard Shortcuts"), Some("win.show-help-overlay"));
+        menu.append(Some("_Getting Started"), Some("win.tutorial"));
         menu.append(Some("_About Butter"), Some("app.about"));
         header.pack_end(
             &gtk::MenuButton::builder()
@@ -320,9 +321,18 @@ impl Window {
                 }
             ))
             .build();
+        let tutorial = gio::ActionEntry::builder("tutorial")
+            .activate(glib::clone!(
+                #[weak(rename_to = inner)]
+                self.0,
+                move |_: &adw::ApplicationWindow, _, _| {
+                    crate::ui::tutorial::present(&Window(inner));
+                }
+            ))
+            .build();
         self.0
             .window
-            .add_action_entries([new_bottle, preferences, show_runners]);
+            .add_action_entries([new_bottle, preferences, show_runners, tutorial]);
         self.0.window.set_help_overlay(Some(&shortcuts()));
     }
 
@@ -500,6 +510,10 @@ fn shortcuts() -> gtk::ShortcutsWindow {
             <child><object class="GtkShortcutsShortcut">
               <property name="title">Preferences</property>
               <property name="accelerator">&lt;Primary&gt;comma</property>
+            </object></child>
+            <child><object class="GtkShortcutsShortcut">
+              <property name="title">Getting Started</property>
+              <property name="accelerator">F1</property>
             </object></child>
             <child><object class="GtkShortcutsShortcut">
               <property name="title">Keyboard Shortcuts</property>

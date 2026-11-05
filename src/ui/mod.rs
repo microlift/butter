@@ -11,6 +11,7 @@ pub mod process_manager;
 pub mod program_dialog;
 pub mod runners_page;
 pub mod task;
+pub mod tutorial;
 pub mod window;
 
 use adw::prelude::*;

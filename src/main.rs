@@ -50,6 +50,7 @@ fn main() -> glib::ExitCode {
         app.set_accels_for_action("win.new-bottle", &["<Primary>n"]);
         app.set_accels_for_action("win.preferences", &["<Primary>comma"]);
         app.set_accels_for_action("win.show-help-overlay", &["<Primary>question"]);
+        app.set_accels_for_action("win.tutorial", &["F1"]);
     });
 
     app.connect_activate(|app| {
@@ -59,7 +60,11 @@ fn main() -> glib::ExitCode {
         }
         let window = ui::window::Window::new(app);
         window.present();
-        ui::permissions::review(&window);
+        // The tour waits for the sandbox questions, so they don't overlap.
+        glib::spawn_future_local(async move {
+            ui::permissions::review(&window).await;
+            ui::tutorial::first_run(&window);
+        });
     });
 
     app.connect_command_line(|app, command_line| {

@@ -44,7 +44,8 @@ async fn closed(dialog: &impl IsA<adw::Dialog>) {
 /// At launch, compare the sandbox with the user's earlier answers: say once
 /// when permissions were taken away, remind them of commands they did not
 /// run, and walk them through steps they have not seen.
-pub fn review(window: &Window) {
+/// Finishes when the user has closed every dialog it showed.
+pub async fn review(window: &Window) {
     let Some(sandbox) = Sandbox::current() else {
         return;
     };
@@ -53,18 +54,15 @@ pub fn review(window: &Window) {
     let review = state.review(&sandbox.context, session());
     save(window, &state);
 
-    let window = window.clone();
-    glib::spawn_future_local(async move {
-        if !review.removed.is_empty() {
-            removed(&window, &review.removed).await;
-        }
-        if !review.forgotten.is_empty() {
-            forgotten(&window, &review.forgotten).await;
-        }
-        if !review.ask.is_empty() {
-            onboarding(&window, &review.ask, first_run).await;
-        }
-    });
+    if !review.removed.is_empty() {
+        removed(window, &review.removed).await;
+    }
+    if !review.forgotten.is_empty() {
+        forgotten(window, &review.forgotten).await;
+    }
+    if !review.ask.is_empty() {
+        onboarding(window, &review.ask, first_run).await;
+    }
 }
 
 /// Shell code in a card, with comments dimmed, above a button that copies

@@ -87,6 +87,11 @@ AppImage support is planned.
 
 ## Getting started
 
+On first launch, Butter shows a short **Getting Started** tour: installing
+runners from official builds or from source, creating a bottle, opening
+terminals, finding logs and adding apps to the applications menu. Open it
+again from the main menu or with F1.
+
 1. Open **Runners** and install a Rosemary release.
 2. Create a bottle and choose that runner.
 3. Install an app into the bottle's `/Applications`, or add a `.app` bundle
