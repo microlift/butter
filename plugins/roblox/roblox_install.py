@@ -29,6 +29,7 @@ from roblox_deploy import (
     normalize_channel,
     normalize_version,
     package_url,
+    plist_channel,
     version_url,
 )
 
@@ -74,17 +75,65 @@ def is_installed(bottle: butter.Bottle, component: Component) -> bool:
 # --- Choosing what to install ---
 
 
-def channel_of(ctx: butter.Context, links=()) -> str:
-    """The channel to install from: the one in a link, if the user lets
-    links choose, or the one in the settings."""
+def channel_plists(bottle: butter.Bottle, component: Component) -> List[Path]:
+    """Each guest user's channel plist for ``component`` that exists, the
+    most recently written first."""
+    if not component.channel_plist:
+        return []
+    users = bottle.drive / "Users"
+    try:
+        homes = [p for p in users.iterdir() if p.is_dir()]
+    except OSError:
+        return []
+    found = []
+    for home in homes:
+        plist = home / "Library" / "Preferences" / component.channel_plist
+        try:
+            found.append((plist.stat().st_mtime, plist))
+        except OSError:
+            continue
+    return [p for _, p in sorted(found, key=lambda f: f[0], reverse=True)]
+
+
+def enrolled_channel(ctx: butter.Context, bottle: butter.Bottle, component: Component) -> Optional[str]:
+    """The channel Roblox enrolled the user into, as the app recorded it in
+    the bottle, or None."""
+    for plist in channel_plists(bottle, component):
+        try:
+            data = plist.read_bytes()
+        except OSError as e:
+            ctx.log(f"Could not read {plist}: {e}")
+            continue
+        channel = plist_channel(data)
+        if channel:
+            return channel
+        ctx.log(f"{plist} names no channel that can be used")
+    return None
+
+
+def channel_of(
+    ctx: butter.Context, bottle: butter.Bottle, component: Component, links=()
+) -> str:
+    """The channel to install from, the first of: the one in a link, if the
+    user lets links choose; the one in the settings, unless it is LIVE; the
+    one Roblox enrolled the user into, if the user lets Roblox choose; LIVE."""
     if ctx.setting("follow_link_channel", False):
         from_link = link_channel(links)
         if from_link:
             return from_link
     try:
-        return normalize_channel(ctx.setting("channel", LIVE))
+        chosen = normalize_channel(ctx.setting("channel", LIVE))
     except DeployError as e:
         raise butter.PluginError(f"Check the Channel setting: {e}") from None
+    if chosen != LIVE:
+        return chosen
+    if ctx.setting("follow_enrolled_channel", True):
+        enrolled = enrolled_channel(ctx, bottle, component)
+        if enrolled:
+            if enrolled != LIVE:
+                ctx.log(f"Roblox enrolled you into the {enrolled} channel")
+            return enrolled
+    return LIVE
 
 
 def arch_of(ctx: butter.Context, bottle: butter.Bottle) -> str:
@@ -144,7 +193,7 @@ def ensure(
     installed = is_installed(bottle, component)
     if installed and not update and not force:
         return app
-    channel = channel_of(ctx, links)
+    channel = channel_of(ctx, bottle, component, links)
     arch = arch_of(ctx, bottle)
     pinned = pinned_version(ctx)
     if pinned:
@@ -163,6 +212,7 @@ def ensure(
         installed
         and not force
         and current.get("version") == version
+        and current.get("channel", channel) == channel
         and current.get("arch") == arch
     ):
         ctx.log(f"{component.title} {version} is up to date")
@@ -199,6 +249,7 @@ def install(
         unpacked = find_app(staging)
         if unpacked is None:
             raise butter.PluginError(f"{url} holds no app")
+        remove_installer(ctx, unpacked, component)
         dest = app_path(bottle, component)
         if dest.exists() or dest.is_symlink():
             os.rename(dest, old)
@@ -233,6 +284,22 @@ def find_app(folder: Path) -> Optional[Path]:
         if apps:
             return apps[0]
     return None
+
+
+def remove_installer(ctx: butter.Context, app: Path, component: Component) -> bool:
+    """Delete Roblox's own installer from ``app``: this plugin installs and
+    updates Roblox in its place. Returns whether there was one."""
+    if not component.installer:
+        return False
+    installer = app / component.installer
+    if installer.is_symlink() or installer.is_file():
+        installer.unlink()
+    elif installer.is_dir():
+        shutil.rmtree(installer)
+    else:
+        return False
+    ctx.log(f"Removed {installer.name} from {component.title}")
+    return True
 
 
 def uninstall(ctx: butter.Context, bottle: butter.Bottle, component: Component) -> None:
@@ -345,6 +412,9 @@ def prepare(ctx: butter.Context, bottle: butter.Bottle, component: Component) ->
     """Apply FastFlags and mods before ``component`` runs."""
     app = app_path(bottle, component)
     ctx.stage(f"Preparing {component.title}", 0.9)
+    # Installs from before the installer was removed, or the installer
+    # putting itself back, still have one.
+    remove_installer(ctx, app, component)
     flags = fflags(ctx, component)
     write_fflags(app, flags)
     if flags:

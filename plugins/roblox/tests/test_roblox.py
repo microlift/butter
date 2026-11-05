@@ -5,6 +5,7 @@ Run with ``python3 -m unittest discover -s plugins/roblox/tests``.
 
 import json
 import os
+import plistlib
 import shutil
 import stat
 import sys
@@ -70,6 +71,16 @@ class DeployTests(unittest.TestCase):
         self.assertIs(deploy.component_for_link("roblox-studio-auth:x"), deploy.STUDIO)
         self.assertIsNone(deploy.component_for_link("/home/u/a.rbxl"))
 
+    def test_plist_channel(self):
+        xml = plistlib.dumps({"www.roblox.com": "ZFlag"})
+        self.assertEqual(deploy.plist_channel(xml), "zflag")
+        binary = plistlib.dumps({"www.roblox.com": "production"}, fmt=plistlib.FMT_BINARY)
+        self.assertEqual(deploy.plist_channel(binary), "LIVE")
+        self.assertEqual(deploy.plist_channel(plistlib.dumps({"other": "zbeta"})), "zbeta")
+        self.assertIsNone(deploy.plist_channel(plistlib.dumps({"www.roblox.com": ""})))
+        self.assertIsNone(deploy.plist_channel(plistlib.dumps({"www.roblox.com": "../x"})))
+        self.assertIsNone(deploy.plist_channel(b"not a plist"))
+
 
 def roblox_zip(path: Path, app: str, marker: str) -> Path:
     """A zip shaped like Roblox's: an app with an executable and a framework."""
@@ -84,6 +95,12 @@ def roblox_zip(path: Path, app: str, marker: str) -> Path:
         add(f"{app}/Contents/MacOS/{app[:-4]}", marker, stat.S_IFREG | 0o755)
         add(f"{app}/Contents/Resources/content/sounds/ouch.ogg", "original ouch")
         add(f"{app}/Contents/Frameworks/R.framework/Versions/A/R", "lib")
+        if app == "RobloxPlayer.app":
+            add(
+                f"{app}/Contents/MacOS/RobloxPlayerInstaller.app/Contents/MacOS/RobloxPlayerInstaller",
+                "installer",
+                stat.S_IFREG | 0o755,
+            )
         add(f"{app}/Contents/Frameworks/R.framework/Versions/Current", "A", stat.S_IFLNK | 0o777)
     return path
 
@@ -285,6 +302,61 @@ class PluginTests(unittest.TestCase):
         self.fake.unavailable_channels.add("private")
         butter._actions["reinstall"](self.ctx("reinstall", channel="Private"))
         self.assertTrue(self.fake.downloads[-1].startswith("https://setup.rbxcdn.com/mac/"))
+
+    def enroll(self, bottle_id, channel, user="me"):
+        prefs = Path(self.fake.bottles[bottle_id]["drive"]) / "Users" / user / "Library" / "Preferences"
+        prefs.mkdir(parents=True, exist_ok=True)
+        (prefs / "com.roblox.RobloxPlayerChannel.plist").write_bytes(
+            plistlib.dumps({"www.roblox.com": channel})
+        )
+
+    def test_enrolled_channel(self):
+        self.fake.add_bottle("rb", "Roblox")
+        self.fake.settings["bottle"] = "rb"
+        butter._actions["player"](self.ctx("player"))
+        self.assertEqual(
+            self.fake.downloads[-1],
+            "https://setup.rbxcdn.com/mac/version-1111111111111111-RobloxPlayer.zip",
+        )
+
+        # Roblox enrolls the user; the next launch switches to that channel.
+        self.enroll("rb", "zcanary")
+        butter._actions["player"](self.ctx("player"))
+        self.assertEqual(
+            self.fake.downloads[-1],
+            "https://setup.rbxcdn.com/channel/zcanary/mac/version-5555555555555555-RobloxPlayer.zip",
+        )
+        ctx = self.ctx("player")
+        entry = rbx.record(ctx, plugin.bottle_for(ctx), deploy.PLAYER)
+        self.assertEqual(entry["channel"], "zcanary")
+        count = len(self.fake.downloads)
+        butter._actions["player"](self.ctx("player"))
+        self.assertEqual(len(self.fake.downloads), count, "up to date on the enrolled channel")
+
+        # A channel in the settings wins, and the enrolled one can be ignored.
+        butter._actions["player"](self.ctx("player", channel="zother"))
+        self.assertIn("/channel/zother/", self.fake.downloads[-1])
+        butter._actions["player"](self.ctx("player", follow_enrolled_channel=False))
+        self.assertTrue(self.fake.downloads[-1].startswith("https://setup.rbxcdn.com/mac/"))
+
+        # Back to production: back to LIVE.
+        self.enroll("rb", "production")
+        butter._actions["player"](self.ctx("player", channel="zother"))
+        butter._actions["player"](self.ctx("player"))
+        self.assertTrue(self.fake.downloads[-1].startswith("https://setup.rbxcdn.com/mac/"))
+
+    def test_installer_is_removed(self):
+        self.fake.add_bottle("rb", "Roblox")
+        self.fake.settings["bottle"] = "rb"
+        butter._actions["player"](self.ctx("player"))
+        installer = self.app("rb") / "Contents/MacOS/RobloxPlayerInstaller.app"
+        self.assertFalse(installer.exists())
+        self.assertTrue((self.app("rb") / "Contents/MacOS/RobloxPlayer").exists())
+
+        # One that comes back is removed again before Roblox starts.
+        (installer / "Contents").mkdir(parents=True)
+        butter._actions["player"](self.ctx("player"))
+        self.assertFalse(installer.exists())
 
     def test_pinned_version_and_arch(self):
         self.fake.add_bottle("rb", "Roblox")

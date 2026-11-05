@@ -64,9 +64,16 @@ default = false
 [[settings]]
 key = "channel"
 title = "Channel"
-subtitle = "The deployment channel to install from; LIVE is the public release"
+subtitle = "The deployment channel to install from; LIVE is the public release, or the channel Roblox enrolled you into"
 type = "string"
 default = "LIVE"
+
+[[settings]]
+key = "follow_enrolled_channel"
+title = "Use the Channel Roblox Chose"
+subtitle = "When the Channel is LIVE, install from the channel Roblox enrolled you into, as it records in the bottle"
+type = "bool"
+default = true
 
 [[settings]]
 key = "follow_link_channel"

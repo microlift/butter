@@ -17,6 +17,7 @@ gameinfo:...+channel:zflag``: ``+``-separated ``key:value`` pairs.
 
 from __future__ import annotations
 
+import plistlib
 import re
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
@@ -48,6 +49,12 @@ class Component:
     fflags_setting: str
     #: The freedesktop category of its shortcut.
     categories: str
+    #: The preferences file, in ``~/Library/Preferences``, where the app
+    #: records the channel Roblox enrolled the user into, if it has one.
+    channel_plist: Optional[str] = None
+    #: Inside the app bundle, Roblox's own installer, which this plugin
+    #: replaces, if the app carries one.
+    installer: Optional[str] = None
 
 
 PLAYER = Component(
@@ -59,6 +66,8 @@ PLAYER = Component(
     schemes=("roblox-player", "roblox"),
     fflags_setting="fflags_player",
     categories="Game;",
+    channel_plist="com.roblox.RobloxPlayerChannel.plist",
+    installer="Contents/MacOS/RobloxPlayerInstaller.app",
 )
 
 STUDIO = Component(
@@ -156,6 +165,33 @@ def link_channel(links) -> Optional[str]:
             except DeployError:
                 return None
     return None
+
+
+#: The key under which Roblox records the channel in its channel plist.
+CHANNEL_PLIST_KEY = "www.roblox.com"
+
+
+def plist_channel(data: bytes) -> Optional[str]:
+    """The channel a Roblox channel plist (XML or binary) names, or None
+    when it names none or can't be read."""
+    try:
+        values = plistlib.loads(data)
+    except Exception:
+        return None
+    if not isinstance(values, dict):
+        return None
+    channel = values.get(CHANNEL_PLIST_KEY)
+    if not isinstance(channel, str):
+        # Should Roblox ever key it by another domain, a single string still
+        # says which channel it is.
+        strings = [v for v in values.values() if isinstance(v, str)]
+        channel = strings[0] if len(strings) == 1 else None
+    if not channel or not channel.strip():
+        return None
+    try:
+        return normalize_channel(channel)
+    except DeployError:
+        return None
 
 
 def component_for_link(link: str) -> Optional[Component]:
