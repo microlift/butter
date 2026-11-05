@@ -110,6 +110,43 @@ choice!(
 );
 
 choice!(
+    /// `ROSEMARY_COMMAND_KEY`: the host key programs see as Command.
+    CommandKey {
+        Super => ("Super", None),
+        SuperCtrlEdit => ("Super, and Ctrl in editing shortcuts", Some("super+ctrl:edit")),
+        Ctrl => ("Ctrl (swapped with Super)", Some("ctrl")),
+        Alt => ("Alt (swapped with Super)", Some("alt")),
+    }
+);
+
+choice!(
+    /// `ROSEMARY_TSO`
+    Tso {
+        Auto => ("Automatic", None),
+        On => ("On", Some("1")),
+        Off => ("Off", Some("0")),
+    }
+);
+
+choice!(
+    /// `ROSEMARY_LINK_WAYS`
+    LinkWays {
+        Four => ("4 (Default)", None),
+        Two => ("2", Some("2")),
+        One => ("1", Some("1")),
+    }
+);
+
+choice!(
+    /// `ROSEMARY_SYSCALL_TRACE`
+    SyscallTrace {
+        Off => ("Off", None),
+        Unknown => ("Unknown calls", Some("unknown")),
+        All => ("All calls", Some("all")),
+    }
+);
+
+choice!(
     /// Who a bottle's environment variable is set for.
     EnvTarget {
         Guest => ("Programs", None),
@@ -243,8 +280,13 @@ pub struct Config {
     pub prefix_home: PrefixHome,
     #[serde(default = "yes")]
     pub steam: bool,
-    #[serde(default = "yes")]
-    pub menu_ctrl: bool,
+    #[serde(default)]
+    pub command_key: CommandKey,
+    /// `ROSEMARY_MENU_CTRL`, which Rosemary replaced with
+    /// `ROSEMARY_COMMAND_KEY`. Moved to `command_key` when the bottle is
+    /// loaded.
+    #[serde(default, rename = "menu_ctrl", skip_serializing)]
+    legacy_menu_ctrl: Option<bool>,
     #[serde(default)]
     pub confine_pointer: bool,
     #[serde(default)]
@@ -252,6 +294,18 @@ pub struct Config {
     /// Hide the Vulkan driver from Rosemary (`VK_DRIVER_FILES=/dev/null`).
     #[serde(default)]
     pub disable_metal: bool,
+    /// Offer the GL driver's own version and extensions instead of a Mac's.
+    #[serde(default)]
+    pub gl_host_features: bool,
+    /// Keep translated Metal shaders and Vulkan pipelines between runs.
+    #[serde(default = "yes")]
+    pub shader_cache: bool,
+    /// Keep code compiled ahead of time between runs.
+    #[serde(default = "yes")]
+    pub aot_cache: bool,
+    /// Compile uncached programs ahead of time in the background.
+    #[serde(default = "yes")]
+    pub aot_background: bool,
     #[serde(default = "yes")]
     pub process_server: bool,
     #[serde(default)]
@@ -260,6 +314,24 @@ pub struct Config {
     pub call_return: bool,
     #[serde(default)]
     pub strict_imports: bool,
+    #[serde(default)]
+    pub tso: Tso,
+    /// Rows in each guest thread's block-link table; 0 leaves it to Rosemary.
+    #[serde(default)]
+    pub link_rows: u32,
+    #[serde(default)]
+    pub link_ways: LinkWays,
+    /// Let guest imports bind to host libraries' symbols.
+    #[serde(default = "yes")]
+    pub passthrough: bool,
+    #[serde(default)]
+    pub syscall_interpose: bool,
+    #[serde(default)]
+    pub syscall_trace: SyscallTrace,
+    #[serde(default)]
+    pub trace_bindings: bool,
+    #[serde(default)]
+    pub libsystem_extensions: bool,
     /// The user's own variables, in the order they were added.
     #[serde(default)]
     pub variables: Vec<EnvVar>,
@@ -302,6 +374,12 @@ impl Config {
                 target,
                 enabled: true,
             });
+        }
+        // Control used to stand in for Command in menu shortcuts unless
+        // turned off. The closest Rosemary has now is Control standing in
+        // for it in the editing shortcuts.
+        if self.legacy_menu_ctrl.take() == Some(true) && self.command_key == CommandKey::Super {
+            self.command_key = CommandKey::SuperCtrlEdit;
         }
     }
 
@@ -423,7 +501,7 @@ impl Bottle {
         // Without access to Steam's folders the bridge has nothing to load.
         let steam = c.steam && permissions::available(Feature::Steam);
         set("ROSEMARY_STEAM", (!steam).then_some("0"));
-        set("ROSEMARY_MENU_CTRL", (!c.menu_ctrl).then_some("0"));
+        set("ROSEMARY_COMMAND_KEY", c.command_key.value());
         set("ROSEMARY_CONFINE_POINTER", c.confine_pointer.then_some("1"));
         set(
             "ROSEMARY_PLAIN_CTRL_CLICK",
@@ -434,6 +512,34 @@ impl Bottle {
         set("ROSEMARY_DEAD_FLAGS", c.dead_flags.then_some("1"));
         set("ROSEMARY_CALL_RETURN", c.call_return.then_some("1"));
         set("ROSEMARY_STRICT_IMPORTS", c.strict_imports.then_some("1"));
+        set(
+            "ROSEMARY_GL_HOST_FEATURES",
+            c.gl_host_features.then_some("1"),
+        );
+        set("ROSEMARY_SHADER_CACHE", (!c.shader_cache).then_some("off"));
+        set("ROSEMARY_AOT_CACHE", (!c.aot_cache).then_some("off"));
+        set(
+            "ROSEMARY_AOT_BACKGROUND",
+            (!c.aot_background).then_some("off"),
+        );
+        set("ROSEMARY_TSO", c.tso.value());
+        let link_rows = c.link_rows.to_string();
+        set(
+            "ROSEMARY_LINK_ROWS",
+            (c.link_rows > 0).then_some(link_rows.as_str()),
+        );
+        set("ROSEMARY_LINK_WAYS", c.link_ways.value());
+        set("ROSEMARY_NO_PASSTHROUGH", (!c.passthrough).then_some("1"));
+        set(
+            "ROSEMARY_SYSCALL_INTERPOSE",
+            c.syscall_interpose.then_some("1"),
+        );
+        set("ROSEMARY_SYSCALL_TRACE", c.syscall_trace.value());
+        set("ROSEMARY_TRACE_BINDINGS", c.trace_bindings.then_some("1"));
+        set(
+            "ROSEMARY_EXPOSE_LIBSYSTEM_EXTENSIONS",
+            c.libsystem_extensions.then_some("1"),
+        );
         let forward = c.forward_env.join(",");
         set(
             "ROSEMARY_FORWARD_ENV_VARS",
@@ -536,6 +642,19 @@ impl Bottle {
             .arg(target)
             .args(args)
             .envs(self.environment())
+            .current_dir(target.parent().unwrap_or(Path::new("/")));
+        Ok(command)
+    }
+
+    /// `rosemary aot TARGET` with this bottle's settings: compile `target`
+    /// ahead of time, along with the code earlier runs compiled on the fly.
+    pub fn aot_command(&self, target: &Path) -> anyhow::Result<Command> {
+        let mut command = self.require_runner()?.command();
+        command
+            .arg("aot")
+            .arg(target)
+            .envs(self.environment())
+            .stdin(Stdio::null())
             .current_dir(target.parent().unwrap_or(Path::new("/")));
         Ok(command)
     }
@@ -668,8 +787,11 @@ mod tests {
     #[test]
     fn defaults_survive_a_minimal_manifest() {
         let config = Config::new("Games", Some("rosemary-v0.2.0".into()));
-        assert!(config.steam && config.menu_ctrl && config.process_server);
+        assert!(config.steam && config.process_server);
+        assert!(config.shader_cache && config.aot_cache && config.aot_background);
+        assert!(config.passthrough);
         assert!(!config.dead_flags);
+        assert_eq!(config.command_key, CommandKey::Super);
         let text = toml::to_string_pretty(&config).unwrap();
         let back: Config = toml::from_str(&text).unwrap();
         assert_eq!(back.runner.as_deref(), Some("rosemary-v0.2.0"));
@@ -692,6 +814,15 @@ mod tests {
         config.present_mode = PresentMode::FifoRelaxed;
         config.refresh_rate = 144;
         config.plain_ctrl_click = true;
+        config.command_key = CommandKey::SuperCtrlEdit;
+        config.gl_host_features = true;
+        config.shader_cache = false;
+        config.aot_background = false;
+        config.tso = Tso::Off;
+        config.link_rows = 131072;
+        config.link_ways = LinkWays::Two;
+        config.passthrough = false;
+        config.syscall_trace = SyscallTrace::Unknown;
         config.forward_env = vec!["ROSEMARY_STATS".into(), "MY_*".into()];
         let var = |name: &str, value: Option<&str>, target| EnvVar {
             name: name.into(),
@@ -717,6 +848,17 @@ mod tests {
         assert_eq!(env["ROSEMARY_PLAIN_CTRL_CLICK"], "1");
         assert_eq!(env["ROSEMARY_FORWARD_ENV_VARS"], "ROSEMARY_STATS,MY_*");
         assert_eq!(env["ROSEMARY_DEAD_FLAGS"], "1");
+        assert_eq!(env["ROSEMARY_COMMAND_KEY"], "super+ctrl:edit");
+        assert_eq!(env["ROSEMARY_GL_HOST_FEATURES"], "1");
+        assert_eq!(env["ROSEMARY_SHADER_CACHE"], "off");
+        assert_eq!(env["ROSEMARY_AOT_BACKGROUND"], "off");
+        assert_eq!(env["ROSEMARY_TSO"], "0");
+        assert_eq!(env["ROSEMARY_LINK_ROWS"], "131072");
+        assert_eq!(env["ROSEMARY_LINK_WAYS"], "2");
+        assert_eq!(env["ROSEMARY_NO_PASSTHROUGH"], "1");
+        assert_eq!(env["ROSEMARY_SYSCALL_TRACE"], "unknown");
+        assert!(!env.contains_key("ROSEMARY_AOT_CACHE"));
+        assert!(!env.contains_key("ROSEMARY_MENU_CTRL"));
         assert_eq!(env["VK_DRIVER_FILES"], "/dev/null");
         assert_eq!(env["ROSEMARY_STEAM"], "1", "user variables win");
         assert_eq!(env["ROSEMARY_ENVIRON"], "FOO=bar\nDISPLAY\nBOTH=x");
@@ -763,6 +905,26 @@ mod tests {
         assert_eq!(env["ROSEMARY_ENVIRON"], "FOO=bar");
         let text = toml::to_string_pretty(&config).unwrap();
         assert!(!text.contains("[env]"), "{text}");
+    }
+
+    #[test]
+    fn menu_ctrl_becomes_a_command_key() {
+        let upgraded = |manifest: &str| {
+            let mut config: Config = toml::from_str(manifest).unwrap();
+            config.upgrade();
+            config
+        };
+        let config = upgraded("name = \"x\"\nmenu_ctrl = true\n");
+        assert_eq!(config.command_key, CommandKey::SuperCtrlEdit);
+        let text = toml::to_string_pretty(&config).unwrap();
+        assert!(!text.contains("menu_ctrl"), "{text}");
+        assert!(text.contains("command_key = \"super-ctrl-edit\""), "{text}");
+
+        let config = upgraded("name = \"x\"\nmenu_ctrl = false\n");
+        assert_eq!(config.command_key, CommandKey::Super);
+        // A key chosen since is kept.
+        let config = upgraded("name = \"x\"\nmenu_ctrl = true\ncommand_key = \"alt\"\n");
+        assert_eq!(config.command_key, CommandKey::Alt);
     }
 
     #[test]

@@ -9,8 +9,8 @@ use gtk::{gio, glib};
 
 use crate::apps::{self, App};
 use crate::bottle::{
-    self, Backend, Bottle, Decorations, EnvTarget, EnvVar, Menu, PrefixHome, PresentMode, Program,
-    SwapInterval, SystemFiles,
+    self, Backend, Bottle, CommandKey, Decorations, EnvTarget, EnvVar, LinkWays, Menu, PrefixHome,
+    PresentMode, Program, SwapInterval, SyscallTrace, SystemFiles, Tso,
 };
 use crate::gpu::{self, Gpu};
 use crate::permissions::{self, Feature};
@@ -413,6 +413,7 @@ impl BottlePage {
                     menu.append(Some("Create _Shortcut…"), Some("app-row.create-shortcut"));
                 }
             }
+            menu.append(Some("Compile _Ahead of Time"), Some("app-row.compile"));
             if entry.added.is_some() {
                 menu.append(Some("_Edit…"), Some("app-row.edit"));
                 menu.append(Some("_Remove"), Some("app-row.remove"));
@@ -470,6 +471,8 @@ impl BottlePage {
                 glib::spawn_future_local(async move { this.remove_shortcut(&id).await });
             }),
         );
+        let path = entry.program.path.clone();
+        add("compile", Box::new(move |this| this.compile(path.clone())));
         let e = entry.clone();
         add(
             "edit",
@@ -732,6 +735,18 @@ impl BottlePage {
             |c, v| c.disable_metal = v,
         ));
         group.add(&self.steam_switch());
+        group.add(&self.switch(
+            "Cache Compiled Code",
+            "Keep the code of emulated programs compiled ahead of time, so later runs start faster",
+            |c| c.aot_cache,
+            |c, v| c.aot_cache = v,
+        ));
+        group.add(&self.switch(
+            "Compile in Background",
+            "Compile an emulated program ahead of time, at low priority, the first time it runs",
+            |c| c.aot_background,
+            |c, v| c.aot_background = v,
+        ));
         group
     }
 
@@ -853,6 +868,19 @@ impl BottlePage {
             |c| c.swap_interval,
             |c, v| c.swap_interval = v,
         ));
+        group.add(&self.switch(
+            "Host OpenGL Features",
+            "Offer the driver's own OpenGL version and extensions instead of a Mac's. \
+             Some programs then take newer paths no Mac has tested",
+            |c| c.gl_host_features,
+            |c, v| c.gl_host_features = v,
+        ));
+        group.add(&self.switch(
+            "Shader Cache",
+            "Keep translated Metal shaders and pipelines, so later runs start faster",
+            |c| c.shader_cache,
+            |c, v| c.shader_cache = v,
+        ));
 
         let refresh = adw::SpinRow::builder()
             .title("Refresh Rate")
@@ -879,14 +907,7 @@ impl BottlePage {
         let group = adw::PreferencesGroup::builder()
             .title("Display and Input")
             .build();
-        group.add(&self.choice(
-            "Window Titlebars",
-            None,
-            Decorations::ALL,
-            Decorations::label,
-            |c| c.decorations,
-            |c, v| c.decorations = v,
-        ));
+        group.add(&self.titlebars_row());
         group.add(&self.choice(
             "Menu Bar",
             Some("Where an application's main menu is shown"),
@@ -895,11 +916,13 @@ impl BottlePage {
             |c| c.menu,
             |c, v| c.menu = v,
         ));
-        group.add(&self.switch(
-            "Control as Command",
-            "Let Ctrl stand in for ⌘ in menu shortcuts",
-            |c| c.menu_ctrl,
-            |c, v| c.menu_ctrl = v,
+        group.add(&self.choice(
+            "Command Key",
+            Some("The key programs see as ⌘"),
+            CommandKey::ALL,
+            CommandKey::label,
+            |c| c.command_key,
+            |c, v| c.command_key = v,
         ));
         group.add(&self.switch(
             "Confine Pointer",
@@ -948,8 +971,167 @@ impl BottlePage {
             |c| c.strict_imports,
             |c, v| c.strict_imports = v,
         ));
+        expander.add_row(&self.switch(
+            "Host Library Passthrough",
+            "Let imports Rosemary does not implement bind to libraries on this computer",
+            |c| c.passthrough,
+            |c, v| c.passthrough = v,
+        ));
+        expander.add_row(&self.choice(
+            "Total Store Order",
+            Some("Keep x86 memory ordering for emulated programs on ARM. Slower, but some programs need it"),
+            Tso::ALL,
+            Tso::label,
+            |c| c.tso,
+            |c, v| c.tso = v,
+        ));
+        let rows = adw::SpinRow::builder()
+            .title("Block-Link Table Rows")
+            .subtitle("Rows per thread linking translated code; 0 uses Rosemary's default")
+            .adjustment(&gtk::Adjustment::new(
+                0.0,
+                0.0,
+                16_777_216.0,
+                1024.0,
+                65536.0,
+                0.0,
+            ))
+            .numeric(true)
+            .build();
+        rows.set_value(self.bottle().config.link_rows as f64);
+        let weak = self.weak();
+        rows.connect_value_notify(move |row| {
+            if let Some(inner) = weak.upgrade() {
+                let value = row.value().round() as u32;
+                let this = BottlePage(inner);
+                if this.bottle().config.link_rows != value {
+                    this.edit(|c| c.link_rows = value);
+                }
+            }
+        });
+        expander.add_row(&rows);
+        expander.add_row(&self.choice(
+            "Block-Link Table Ways",
+            Some("Rows one address may occupy in the table"),
+            LinkWays::ALL,
+            LinkWays::label,
+            |c| c.link_ways,
+            |c, v| c.link_ways = v,
+        ));
+        expander.add_row(&self.switch(
+            "Raw Syscall Interposition",
+            "Trap system calls programs make without libc. Native programs on x86-64 only",
+            |c| c.syscall_interpose,
+            |c, v| c.syscall_interpose = v,
+        ));
         group.add(&expander);
+
+        let debugging = adw::ExpanderRow::builder().title("Debugging").build();
+        debugging.add_row(&self.choice(
+            "Trace System Calls",
+            Some("Log system calls to the program's output. Native programs on x86-64 only"),
+            SyscallTrace::ALL,
+            SyscallTrace::label,
+            |c| c.syscall_trace,
+            |c, v| c.syscall_trace = v,
+        ));
+        debugging.add_row(&self.switch(
+            "Trace Cocoa Bindings",
+            "Log each value Cocoa bindings hand to a bound object",
+            |c| c.trace_bindings,
+            |c, v| c.trace_bindings = v,
+        ));
+        debugging.add_row(&self.switch(
+            "Rosemary libSystem Extensions",
+            "Expose Rosemary's own additions to libSystem, for tools built for them",
+            |c| c.libsystem_extensions,
+            |c, v| c.libsystem_extensions = v,
+        ));
+        group.add(&debugging);
         group
+    }
+
+    /// Who draws titlebars. Choosing the desktop's on a compositor that
+    /// draws none shows a warning: Rosemary then draws them with libdecor.
+    fn titlebars_row(&self) -> adw::ComboRow {
+        let row = self.choice(
+            "Window Titlebars",
+            None,
+            Decorations::ALL,
+            Decorations::label,
+            |c| c.decorations,
+            |c, v| c.decorations = v,
+        );
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        content.append(&gtk::Image::from_icon_name("dialog-warning-symbolic"));
+        // Two short lines, so the row keeps room for its title on a
+        // narrow window.
+        content.append(
+            &gtk::Label::builder()
+                .label("May cause issues")
+                .wrap(true)
+                .max_width_chars(9)
+                .justify(gtk::Justification::Center)
+                .css_classes(["caption"])
+                .build(),
+        );
+        let warning = gtk::Button::builder()
+            .child(&content)
+            .tooltip_text("Details")
+            .valign(gtk::Align::Center)
+            .visible(false)
+            .css_classes(["flat", "warning"])
+            .build();
+        row.add_suffix(&warning);
+
+        // Only once the compositor is known to draw no titlebars itself.
+        let lacks = Rc::new(Cell::new(false));
+        let show = {
+            let (warning, lacks) = (warning.clone(), lacks.clone());
+            move |row: &adw::ComboRow| {
+                let chosen = Decorations::from_index(row.selected()) == Decorations::Server;
+                warning.set_visible(chosen && lacks.get());
+            }
+        };
+        row.connect_selected_notify(show.clone());
+        let r = row.clone();
+        glib::spawn_future_local(async move {
+            let answer = crate::process::background(crate::wayland::server_decorations).await;
+            lacks.set(answer == Some(false));
+            show(&r);
+        });
+
+        let weak = self.weak();
+        let r = row.clone();
+        warning.connect_clicked(move |_| {
+            let Some(inner) = weak.upgrade() else { return };
+            let this = BottlePage(inner);
+            let row = r.clone();
+            glib::spawn_future_local(async move {
+                let dialog = adw::AlertDialog::new(
+                    Some("Desktop Titlebars May Cause Issues"),
+                    Some(
+                        "This desktop does not draw titlebars for the windows that ask it to, \
+                         so Rosemary will likely draw them with libdecor instead.\n\n\
+                         libdecor uses GTK 3, an old version of GTK, which cannot share a \
+                         program with the newer GTK that WebKitGTK uses. Applications that \
+                         use WebKitGTK may crash or fail to open their windows.\n\n\
+                         If an application has trouble, switch back to the Mac-style titlebar.",
+                    ),
+                );
+                dialog.add_responses(&[
+                    ("keep", "_Keep Desktop Titlebar"),
+                    ("client", "_Use Mac-Style Titlebar"),
+                ]);
+                dialog.set_response_appearance("client", adw::ResponseAppearance::Suggested);
+                dialog.set_default_response(Some("client"));
+                dialog.set_close_response("keep");
+                if dialog.choose_future(Some(&this.window().widget())).await == "client" {
+                    row.set_selected(Decorations::Client.index());
+                }
+            });
+        });
+        row
     }
 
     fn environment_group(&self) -> adw::PreferencesGroup {
@@ -1131,6 +1313,37 @@ impl BottlePage {
             });
             list.append(&row);
         }
+    }
+
+    /// Run `rosemary aot` for `target` in a task dialog, so its next runs
+    /// start from code compiled ahead of time.
+    fn compile(&self, target: std::path::PathBuf) {
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let bottle = this.bottle();
+            if !bottle.config.aot_cache {
+                this.window()
+                    .error("Turn on Cache Compiled Code to compile ahead of time");
+                return;
+            }
+            let key = format!("bottle:{}", bottle.id);
+            if !this.window().begin(&key) {
+                this.window().notify("This bottle is already busy");
+                return;
+            }
+            match bottle.aot_command(&target) {
+                Ok(mut command) => {
+                    let _ = task::run(this.window(), "Compiling Ahead of Time", move |r| {
+                        r.stage("rosemary aot", None);
+                        r.run_checked(&mut command)?;
+                        Ok("Compiled".into())
+                    })
+                    .await;
+                }
+                Err(e) => this.window().error(e),
+            }
+            this.window().end(&key);
+        });
     }
 
     /// Run `rosemary prefix ACTION` for this bottle in a task dialog.

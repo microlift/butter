@@ -16,6 +16,7 @@ mod supervisor;
 mod toolchain;
 mod ui;
 mod util;
+mod wayland;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
