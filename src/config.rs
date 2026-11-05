@@ -89,6 +89,12 @@ impl Paths {
         self.data.join("shortcuts")
     }
 
+    /// Runner builds started and not yet finished, so a build cut short by
+    /// Butter quitting resumes on the next launch; see `runner::pending_builds`.
+    pub fn pending_builds_file(&self) -> PathBuf {
+        self.data.join("builds.toml")
+    }
+
     pub fn settings_file(&self) -> PathBuf {
         self.config.join("settings.toml")
     }

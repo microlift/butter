@@ -16,6 +16,12 @@ use crate::{bottle, markdown, toolchain, util};
 #[derive(Clone)]
 pub struct RunnersPage(Rc<Inner>);
 
+/// A runner [`RunnersPage::install`] builds from source.
+struct Build {
+    pending: runner::Target,
+    resumed: bool,
+}
+
 struct Inner {
     page: adw::PreferencesPage,
     window: Window,
@@ -269,6 +275,7 @@ impl RunnersPage {
                 &window,
                 Some("toolchain"),
                 "Rust Toolchain",
+                true,
                 toolchain::install_managed,
             )
             .await;
@@ -794,6 +801,7 @@ impl RunnersPage {
             this.install(
                 runner::id_for_binary(&release.tag_name),
                 format!("Downloading Rosemary {}", release.tag_name),
+                None,
                 move |r| runner::install_binary(&release, r),
             );
         });
@@ -822,19 +830,40 @@ impl RunnersPage {
 
     fn connect_build(&self, button: &gtk::Button, target: runner::Target) {
         let this = self.clone();
-        button.connect_clicked(move |_| {
-            let settings = this.window().settings();
-            let target = target.clone();
-            this.install(
-                target.id.clone(),
-                format!("Building Rosemary {}", target.label),
-                move |r| runner::build_from_source(&target, &settings, r),
-            );
+        button.connect_clicked(move |_| this.build(target.clone(), false));
+    }
+
+    /// Build `target` from source. A `resumed` build is one an earlier
+    /// Butter left unfinished when it quit; it carries on without opening
+    /// its log.
+    fn build(&self, target: runner::Target, resumed: bool) {
+        let settings = self.window().settings();
+        let id = target.id.clone();
+        let title = format!("Building Rosemary {}", target.label);
+        let pending = target.clone();
+        self.install(id, title, Some(Build { pending, resumed }), move |r| {
+            if resumed {
+                runner::resume_build(&target, &settings, r)
+            } else {
+                runner::build_from_source(&target, &settings, r)
+            }
+        });
+    }
+
+    /// Carry on with the builds a Butter that quit left unfinished.
+    pub fn resume_builds(&self) {
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            for target in background(runner::pending_builds).await {
+                this.build(target, true);
+            }
         });
     }
 
     /// Run `job`, which installs runner `id`, with its progress showing.
-    fn install<F>(&self, id: String, title: String, job: F)
+    /// When it is a `build` from source, it is remembered while it runs, so
+    /// it resumes if Butter quits first.
+    fn install<F>(&self, id: String, title: String, build: Option<Build>, job: F)
     where
         F: FnOnce(&Reporter) -> anyhow::Result<String> + Send + 'static,
     {
@@ -847,8 +876,31 @@ impl RunnersPage {
                 window.show_log(&key);
                 return;
             }
+            if let Some(build) = &build
+                && let Err(e) = runner::remember_build(&build.pending)
+            {
+                eprintln!("butter: could not remember the build of {id}: {e:#}");
+            }
+            let resumed = build.as_ref().filter(|b| b.resumed);
+            if let Some(build) = resumed {
+                let toast = adw::Toast::builder()
+                    .title(glib::markup_escape_text(&format!(
+                        "Resumed building Rosemary {}",
+                        build.pending.label
+                    )))
+                    .button_label("Show Log")
+                    .build();
+                let (window, key) = (window.clone(), key.clone());
+                toast.connect_button_clicked(move |_| window.show_log(&key));
+                this.window().toast(toast);
+            }
             this.refresh_installed();
-            let result = task::run_keyed(&window, Some(&key), &title, job).await;
+            let result = task::run_keyed(&window, Some(&key), &title, resumed.is_none(), job).await;
+            if build.is_some()
+                && let Err(e) = runner::forget_build(&id)
+            {
+                eprintln!("butter: could not forget the build of {id}: {e:#}");
+            }
             window.end(&key);
             if let Ok(message) = result {
                 if window.settings().default_runner.is_none() {

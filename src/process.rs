@@ -82,6 +82,17 @@ impl Reporter {
         command: &mut Command,
         observe: impl Fn(&str) + Send + Sync + 'static,
     ) -> anyhow::Result<ExitStatus> {
+        self.run_tracked(command, observe, |_| {})
+    }
+
+    /// Like [`Reporter::run_observed`], also passing the pid of the started
+    /// command, which leads a process group of its own, to `started`.
+    pub fn run_tracked(
+        &self,
+        command: &mut Command,
+        observe: impl Fn(&str) + Send + Sync + 'static,
+        started: impl FnOnce(u32),
+    ) -> anyhow::Result<ExitStatus> {
         let observe: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(observe);
         self.line(format!("$ {}", describe(command)));
         command
@@ -93,6 +104,7 @@ impl Reporter {
         let mut child = command
             .spawn()
             .with_context(|| format!("could not start {:?}", command.get_program()))?;
+        started(child.id());
         let readers = [
             child
                 .stdout

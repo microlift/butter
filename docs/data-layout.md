@@ -5,6 +5,7 @@
 | Runners | `$XDG_DATA_HOME/butter/runners/<id>/` (`runner.toml`, `bin/rosemary`, and `Rosemary/` for an official build) |
 | Bottles | `$XDG_DATA_HOME/butter/bottles/<id>/` (`bottle.toml`, `prefix/`, `logs/`, and `run/` while programs run) |
 | Butter's Rust toolchain | `$XDG_DATA_HOME/butter/toolchain/` |
+| Runner builds in progress, resumed on the next launch if Butter quits first | `$XDG_DATA_HOME/butter/builds.toml` |
 | Build cache and release list | `$XDG_CACHE_HOME/butter/` |
 | Application icons, converted to PNG | `$XDG_CACHE_HOME/butter/icons/` |
 | Shortcuts | Installed by the Dynamic Launcher portal, as `io.github.microlift.butter.<bottle>.app_<hash>.desktop`. Without the portal (outside the Flatpak only), in `$XDG_DATA_HOME/applications/`, with icons in `$XDG_DATA_HOME/butter/shortcuts/` |

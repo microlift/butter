@@ -412,6 +412,13 @@ impl Window {
         self.0.busy.borrow().contains(key)
     }
 
+    /// Carry on with runner builds that were cut short when Butter last quit.
+    pub fn resume_builds(&self) {
+        if let Some(page) = self.0.runners.get() {
+            page.resume_builds();
+        }
+    }
+
     /// Re-read bottles and runners from disk everywhere.
     pub fn refresh(&self) {
         if let Some(page) = self.0.bottles.get() {

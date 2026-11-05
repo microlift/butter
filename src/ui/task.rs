@@ -19,15 +19,17 @@ pub async fn run<F>(window: &Window, title: &str, job: F) -> Result<String, Stri
 where
     F: FnOnce(&Reporter) -> anyhow::Result<String> + Send + 'static,
 {
-    run_keyed(window, None, title, job).await
+    run_keyed(window, None, title, true, job).await
 }
 
 /// Like `run`, for the job the window knows as `key` (see `Window::begin`):
-/// while it runs, `Window::show_log(key)` brings the dialog back.
+/// while it runs, `Window::show_log(key)` brings the dialog back. Unless
+/// `show`, the dialog starts out closed.
 pub async fn run_keyed<F>(
     window: &Window,
     key: Option<&str>,
     title: &str,
+    show: bool,
     job: F,
 ) -> Result<String, String>
 where
@@ -103,7 +105,9 @@ where
     if let Some(key) = key {
         window.set_log(key, &dialog);
     }
-    dialog.present(Some(&window.widget()));
+    if show {
+        dialog.present(Some(&window.widget()));
+    }
 
     // Pulse while nobody knows how far along the job is.
     let determinate = Rc::new(Cell::new(false));

@@ -64,6 +64,7 @@ fn main() -> glib::ExitCode {
         // The tour waits for the sandbox questions, so they don't overlap.
         glib::spawn_future_local(async move {
             ui::permissions::review(&window).await;
+            window.resume_builds();
             ui::tutorial::first_run(&window);
         });
     });

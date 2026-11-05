@@ -12,7 +12,7 @@ use crate::config::Paths;
 use crate::github::Release;
 use crate::process::Reporter;
 use crate::settings::{BuildProfile, Settings};
-use crate::{github, toolchain, util};
+use crate::{github, procs, toolchain, util};
 
 const MANIFEST: &str = "runner.toml";
 
@@ -567,6 +567,163 @@ impl Target {
     }
 }
 
+impl Target {
+    /// The target a remembered build was for.
+    fn from_pending(build: &PendingBuild) -> Option<Target> {
+        match (&build.tag, &build.commit) {
+            (Some(tag), _) => Some(Target::release(tag)),
+            (None, Some(sha)) => Some(Target::commit(sha)),
+            (None, None) => None,
+        }
+    }
+}
+
+/// A build from source that was started and has not ended yet, as written to
+/// [`Paths::pending_builds_file`]. One still listed when Butter starts was cut
+/// short by Butter quitting, and is resumed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingBuild {
+    #[serde(default)]
+    pub tag: Option<String>,
+    #[serde(default)]
+    pub commit: Option<String>,
+    /// When it was started, as Unix seconds.
+    #[serde(default)]
+    pub started: i64,
+    /// The `cargo` compiling it, which leads a process group of its own.
+    #[serde(default)]
+    pub cargo: Option<procs::Id>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct PendingBuilds {
+    #[serde(default, rename = "build")]
+    builds: Vec<PendingBuild>,
+}
+
+/// Serializes changes to the pending builds file, which the interface and
+/// build threads both write.
+static PENDING_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn read_pending(path: &Path) -> PendingBuilds {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| toml::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+/// Change the pending builds file at `path` with `change`.
+fn update_pending(path: &Path, change: impl FnOnce(&mut Vec<PendingBuild>)) -> anyhow::Result<()> {
+    let _guard = PENDING_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut pending = read_pending(path);
+    change(&mut pending.builds);
+    if pending.builds.is_empty() {
+        return match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        };
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    util::write_atomic(path, toml::to_string_pretty(&pending)?.as_bytes())
+}
+
+fn pending_id(build: &PendingBuild) -> Option<String> {
+    Target::from_pending(build).map(|t| t.id)
+}
+
+/// Note that `target` is being built, until [`forget_build`].
+pub fn remember_build(target: &Target) -> anyhow::Result<()> {
+    let build = PendingBuild {
+        tag: target.tag.clone(),
+        commit: target.commit.clone(),
+        started: util::now(),
+        cargo: None,
+    };
+    update_pending(&Paths::get().pending_builds_file(), |builds| {
+        builds.retain(|b| pending_id(b).as_deref() != Some(&target.id));
+        builds.push(build);
+    })
+}
+
+/// Note that the build of runner `id` ended, however it went.
+pub fn forget_build(id: &str) -> anyhow::Result<()> {
+    update_pending(&Paths::get().pending_builds_file(), |builds| {
+        builds.retain(|b| pending_id(b).as_deref() != Some(id));
+    })
+}
+
+/// Note the `cargo` compiling runner `id`, so that a later Butter can stop
+/// it if this one quits while it runs.
+fn note_cargo(id: &str, pid: u32) {
+    let Some(cargo) = procs::stat(pid as i32).map(|s| s.id()) else {
+        return;
+    };
+    let _ = update_pending(&Paths::get().pending_builds_file(), |builds| {
+        for build in builds.iter_mut() {
+            if pending_id(build).as_deref() == Some(id) {
+                build.cargo = Some(cargo);
+            }
+        }
+    });
+}
+
+/// Builds a Butter that quit left unfinished, to resume, with any `cargo`
+/// still compiling them stopped. Ones that finished installing after all are
+/// forgotten. Only for Butter's start, when none of them are its own.
+pub fn pending_builds() -> Vec<Target> {
+    let path = Paths::get().pending_builds_file();
+    let builds = {
+        let _guard = PENDING_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        read_pending(&path).builds
+    };
+    let mut targets = Vec::new();
+    for build in builds {
+        if let Some(cargo) = build.cargo {
+            stop_stale_cargo(cargo);
+        }
+        let Some(target) = Target::from_pending(&build) else {
+            continue;
+        };
+        let done =
+            find(&target.id).is_some_and(|r| r.is_usable() && r.info.installed >= build.started);
+        if done {
+            let _ = forget_build(&target.id);
+        } else if !targets.iter().any(|t: &Target| t.id == target.id) {
+            targets.push(target);
+        }
+    }
+    targets
+}
+
+/// Stop `cargo`, which an earlier Butter left compiling, with everything it
+/// started, so the resumed build does not wait for its lock. Cargo carries on
+/// once its Butter is gone only until it next writes to its closed pipes.
+fn stop_stale_cargo(cargo: procs::Id) {
+    // Never one this Butter started.
+    let ours = procs::stat(cargo.pid).is_some_and(|s| s.ppid == std::process::id() as i32);
+    if procs::is_alive(cargo) && !ours {
+        // SAFETY: plain syscall; the group's leader was just seen alive as
+        // the process recorded, so the group is still that build's.
+        unsafe { libc::killpg(cargo.pid, libc::SIGTERM) };
+    }
+}
+
+/// Resume a build of `target` that a Butter which quit left unfinished.
+/// Cargo picks up from what it had compiled already.
+pub fn resume_build(
+    target: &Target,
+    settings: &Settings,
+    reporter: &Reporter,
+) -> anyhow::Result<String> {
+    reporter.line(format!(
+        "resuming the build of Rosemary {}, which was interrupted when Butter quit",
+        target.label
+    ));
+    build_from_source(target, settings, reporter)
+}
+
 /// Download `target`'s source, build it and install it as a runner.
 pub fn build_from_source(
     target: &Target,
@@ -673,12 +830,16 @@ pub fn build_from_archive(
     }
     let compiled = std::sync::atomic::AtomicUsize::new(0);
     let progress = reporter.clone();
-    let status = reporter.run_observed(&mut cargo, move |line| {
-        if line.trim_start().starts_with("Compiling ") {
-            let n = compiled.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            progress.progress((n as f64 / packages as f64).min(0.99));
-        }
-    })?;
+    let status = reporter.run_tracked(
+        &mut cargo,
+        move |line| {
+            if line.trim_start().starts_with("Compiling ") {
+                let n = compiled.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                progress.progress((n as f64 / packages as f64).min(0.99));
+            }
+        },
+        |pid| note_cargo(&id, pid),
+    )?;
     if !status.success() {
         bail!("cargo build failed ({status}); see the log for details");
     }
@@ -762,6 +923,43 @@ mod tests {
         assert!(dest.join("Cargo.toml").is_file());
         assert!(dest.join("crates/a.rs").is_file());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pending_builds_round_trip() {
+        let dir = std::env::temp_dir().join(format!("butter-pending-{}", std::process::id()));
+        let path = dir.join("builds.toml");
+        let release = PendingBuild {
+            tag: Some("v0.2.0".into()),
+            commit: None,
+            started: 1,
+            cargo: Some(procs::Id { pid: 42, start: 7 }),
+        };
+        let commit = PendingBuild {
+            tag: None,
+            commit: Some("0123456789abcdef".into()),
+            started: 2,
+            cargo: None,
+        };
+        update_pending(&path, |b| b.extend([release.clone(), commit.clone()])).unwrap();
+        assert_eq!(read_pending(&path).builds, vec![release.clone(), commit]);
+        let targets: Vec<_> = read_pending(&path)
+            .builds
+            .iter()
+            .filter_map(Target::from_pending)
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(targets, ["rosemary-v0.2.0", "rosemary-git-0123456789ab"]);
+
+        update_pending(&path, |b| {
+            b.retain(|b| pending_id(b).as_deref() == Some("rosemary-v0.2.0"))
+        })
+        .unwrap();
+        assert_eq!(read_pending(&path).builds, vec![release]);
+        // The last one gone, so is the file.
+        update_pending(&path, |b| b.clear()).unwrap();
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
