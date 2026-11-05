@@ -6,6 +6,8 @@ pub mod bottles_page;
 pub mod env_dialog;
 pub mod new_bottle;
 pub mod permissions;
+pub mod plugins;
+pub mod plugins_page;
 pub mod preferences;
 pub mod process_manager;
 pub mod program_dialog;

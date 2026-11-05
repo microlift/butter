@@ -177,9 +177,29 @@ pub fn present(window: &Window) {
     building.add(&cargo);
     building.add(&remove_toolchain);
 
+    let python = adw::EntryRow::builder()
+        .title("Python Executable (blank to find python3)")
+        .text(settings.python.clone().unwrap_or_default())
+        .show_apply_button(true)
+        .build();
+    python.connect_apply({
+        let window = window.clone();
+        move |row| {
+            let text = row.text().trim().to_string();
+            window.update_settings(|s| s.python = (!text.is_empty()).then_some(text));
+            window.refresh_plugins();
+        }
+    });
+    let plugins = adw::PreferencesGroup::builder()
+        .title("Plugins")
+        .description("Plugins are Python scripts; they run with Python 3.9 or newer")
+        .build();
+    plugins.add(&python);
+
     let page = adw::PreferencesPage::new();
     page.add(&releases);
     page.add(&building);
+    page.add(&plugins);
     if let Some(group) = ui::permissions::preferences_group(window) {
         page.add(&group);
     }

@@ -10,11 +10,13 @@ use gtk::{gio, glib};
 
 use crate::bottle::{self, Backend, Bottle};
 use crate::config;
+use crate::plugins::{self, Invocation};
 use crate::sessions::{Session, Sessions, Status};
 use crate::settings::Settings;
 use crate::shortcuts::Launch;
 use crate::ui::bottle_page::BottlePage;
 use crate::ui::bottles_page::BottlesPage;
+use crate::ui::plugins_page::PluginsPage;
 use crate::ui::process_manager::{ProcessManager, WeakProcessManager};
 use crate::ui::runners_page::RunnersPage;
 
@@ -39,6 +41,7 @@ pub struct Inner {
     logs: RefCell<HashMap<String, adw::Dialog>>,
     bottles: OnceCell<BottlesPage>,
     runners: OnceCell<RunnersPage>,
+    plugins: OnceCell<PluginsPage>,
     /// Programs running in bottles.
     sessions: Sessions,
     /// Pages on the navigation stack. Their widgets hold only weak
@@ -134,6 +137,7 @@ impl Window {
             logs: RefCell::default(),
             bottles: OnceCell::new(),
             runners: OnceCell::new(),
+            plugins: OnceCell::new(),
             sessions: Sessions::new(),
             open: RefCell::default(),
             managers: RefCell::default(),
@@ -159,8 +163,17 @@ impl Window {
             "Runners",
             "system-run-symbolic",
         );
+        let plugins = PluginsPage::new(&this);
+        this.0.stack.add_titled_with_icon(
+            plugins.widget(),
+            Some("plugins"),
+            "Plugins",
+            "application-x-addon-symbolic",
+        );
         let _ = this.0.bottles.set(bottles);
         let _ = this.0.runners.set(runners);
+        let _ = this.0.plugins.set(plugins);
+        this.refresh_plugins();
 
         this.setup_actions();
         this.refresh();
@@ -200,6 +213,45 @@ impl Window {
             });
         let args = launch.arguments(&bottle);
         self.launch(&bottle, &launch.target, &args, launch.backend, &name);
+    }
+
+    /// Run what a plugin shortcut or link asked for. As with
+    /// [`Window::run_shortcut`], a window never shown stays hidden unless
+    /// something goes wrong.
+    pub fn run_plugin(&self, invocation: &Invocation) {
+        let fail = |text: String| {
+            self.present();
+            self.error(text);
+        };
+        let Some(plugin) = plugins::find(&invocation.plugin) else {
+            return fail(format!("There is no plugin named {}", invocation.plugin));
+        };
+        if self
+            .settings()
+            .disabled_plugins
+            .iter()
+            .any(|id| id == plugin.id())
+        {
+            return fail(format!(
+                "The {} plugin is switched off; switch it on in Plugins",
+                plugin.name()
+            ));
+        }
+        let bottle = match &invocation.bottle {
+            Some(id) => match bottle::load(id) {
+                Some(bottle) => Some(bottle),
+                None => return fail(format!("There is no bottle named {id}")),
+            },
+            None => None,
+        };
+        let (window, action, open) = (
+            self.clone(),
+            invocation.action.clone(),
+            invocation.open.clone(),
+        );
+        glib::spawn_future_local(async move {
+            crate::ui::plugins::run(&window, &plugin, &action, bottle, open).await;
+        });
     }
 
     /// Start `target` in `bottle` and report how it ends.
@@ -282,7 +334,7 @@ impl Window {
     }
 
     /// Close a window that was never shown, once nothing it started runs.
-    fn close_if_unused(&self) {
+    pub fn close_if_unused(&self) {
         let window = self.0.window.clone();
         let sessions = self.0.sessions.clone();
         glib::idle_add_local_once(move || {
@@ -426,6 +478,13 @@ impl Window {
         }
         if let Some(page) = self.0.runners.get() {
             page.refresh_installed();
+        }
+    }
+
+    /// Look for plugins again.
+    pub fn refresh_plugins(&self) {
+        if let Some(page) = self.0.plugins.get() {
+            page.refresh();
         }
     }
 

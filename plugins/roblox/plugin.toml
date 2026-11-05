@@ -1,0 +1,135 @@
+# A bootstrapper for the Mac versions of Roblox and Roblox Studio: it
+# installs them into a bottle, keeps them up to date, applies FastFlags and
+# mods, and opens roblox-player:, roblox:, roblox-studio: and
+# roblox-studio-auth: links from the browser.
+
+id = "roblox"
+name = "Roblox"
+version = "1.0.0"
+description = "Install, update and launch Roblox and Roblox Studio, with channels, FastFlags and mods"
+authors = ["The Butter Contributors"]
+entry = "plugin.py"
+icon = "icon.svg"
+api = 1
+
+[[actions]]
+id = "setup"
+title = "Set Up Roblox"
+subtitle = "Make a bottle if needed, install Roblox and add it to the applications menu, where it opens Roblox links"
+
+[[actions]]
+id = "player"
+title = "Launch Roblox"
+subtitle = "Update Roblox if needed, apply FastFlags and mods, and start it"
+
+[[actions]]
+id = "studio"
+title = "Launch Roblox Studio"
+subtitle = "Install or update Roblox Studio if needed, and start it"
+
+[[actions]]
+id = "update"
+title = "Check for Updates"
+subtitle = "Update the installed Roblox apps to the newest version of the channel"
+
+[[actions]]
+id = "reinstall"
+title = "Reinstall"
+subtitle = "Download the installed Roblox apps again, undoing any damage"
+
+[[actions]]
+id = "mods"
+title = "Open Mods Folder"
+subtitle = "Files here replace those in each app's Resources folder"
+
+[[actions]]
+id = "install-here"
+title = "Install Roblox Here"
+subtitle = "Use this bottle for Roblox and install it"
+scope = "bottle"
+
+[[settings]]
+key = "bottle"
+title = "Bottle"
+subtitle = "Where Roblox is installed. Set Up makes one named Roblox if none is chosen"
+type = "bottle"
+
+[[settings]]
+key = "studio"
+title = "Install Roblox Studio"
+subtitle = "Set Up also installs Studio, and adds it to the applications menu"
+type = "bool"
+default = false
+
+[[settings]]
+key = "channel"
+title = "Channel"
+subtitle = "The deployment channel to install from; LIVE is the public release"
+type = "string"
+default = "LIVE"
+
+[[settings]]
+key = "follow_link_channel"
+title = "Use the Channel of Links"
+subtitle = "When a link from the website names a channel, install from it"
+type = "bool"
+default = false
+
+[[settings]]
+key = "version"
+title = "Version"
+subtitle = "Pin a version, such as version-0123456789abcdef. Leave empty for the newest"
+type = "string"
+default = ""
+
+[[settings]]
+key = "architecture"
+title = "Architecture"
+subtitle = "Which build of Roblox to install"
+type = "choice"
+default = "auto"
+options = [
+  { value = "auto", label = "Same as the bottle" },
+  { value = "arm64", label = "ARM64" },
+  { value = "x86-64", label = "Intel (x86-64)" },
+]
+
+[[settings]]
+key = "update_on_launch"
+title = "Update on Launch"
+subtitle = "Check for a new version each time Roblox starts"
+type = "bool"
+default = true
+
+[[settings]]
+key = "renderer"
+title = "Renderer"
+subtitle = "The graphics API Roblox prefers, through FastFlags"
+type = "choice"
+default = "auto"
+options = [
+  { value = "auto", label = "Roblox's choice" },
+  { value = "metal", label = "Metal" },
+  { value = "opengl", label = "OpenGL" },
+]
+
+[[settings]]
+key = "fflags_player"
+title = "Roblox FastFlags"
+subtitle = "A JSON object written to Roblox's ClientAppSettings.json"
+type = "text"
+default = "{}"
+
+[[settings]]
+key = "fflags_studio"
+title = "Roblox Studio FastFlags"
+subtitle = "A JSON object written to Roblox Studio's ClientAppSettings.json"
+type = "text"
+default = "{}"
+
+[[settings]]
+key = "mods"
+title = "Apply Mods"
+subtitle = "Copy the files in the mods folder into the apps"
+type = "bool"
+default = true

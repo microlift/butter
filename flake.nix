@@ -48,7 +48,7 @@
           # the desktop file, metainfo and icons are needed to install.
           src = lib.cleanSourceWith {
             src = ./.;
-            filter = path: type: (craneLib.filterCargoSources path type) || (lib.hasInfix "/data/" path) || (baseNameOf path == "build.rs");
+            filter = path: type: (craneLib.filterCargoSources path type) || (lib.hasInfix "/data/" path) || (lib.hasInfix "/plugins/" path) || (lib.hasInfix "/sdk/" path) || (baseNameOf path == "build.rs");
           };
 
           commonArgs = {

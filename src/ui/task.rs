@@ -35,7 +35,28 @@ pub async fn run_keyed<F>(
 where
     F: FnOnce(&Reporter) -> anyhow::Result<String> + Send + 'static,
 {
+    run_with(window, key, title, show, false, job).await
+}
+
+/// Like `run_keyed`; with `close_on_success`, the dialog closes itself once
+/// the job has succeeded.
+///
+/// While the window is hidden, as when Butter was started by a shortcut,
+/// the dialog is a window of its own. Closing it then lets Butter quit, if
+/// nothing it started is running.
+pub async fn run_with<F>(
+    window: &Window,
+    key: Option<&str>,
+    title: &str,
+    show: bool,
+    close_on_success: bool,
+    job: F,
+) -> Result<String, String>
+where
+    F: FnOnce(&Reporter) -> anyhow::Result<String> + Send + 'static,
+{
     let (receiver, canceller) = process::spawn(job);
+    let floating = !window.widget().is_visible();
 
     let stage = gtk::Label::builder()
         .label("Starting…")
@@ -105,8 +126,16 @@ where
     if let Some(key) = key {
         window.set_log(key, &dialog);
     }
+    if floating {
+        let window = window.clone();
+        dialog.connect_closed(move |_| window.close_if_unused());
+    }
     if show {
-        dialog.present(Some(&window.widget()));
+        if floating {
+            dialog.present(None::<&gtk::Widget>);
+        } else {
+            dialog.present(Some(&window.widget()));
+        }
     }
 
     // Pulse while nobody knows how far along the job is.
@@ -161,6 +190,10 @@ where
     button.set_sensitive(true);
     button.set_label("_Close");
     match &result {
+        Ok(_) if close_on_success && dialog.parent().is_some() => {
+            dialog.close();
+            return result;
+        }
         Ok(message) => {
             stage.set_label(message);
             progress.set_fraction(1.0);

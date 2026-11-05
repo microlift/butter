@@ -95,6 +95,36 @@ impl Paths {
         self.data.join("builds.toml")
     }
 
+    /// Plugins the user installed, one folder each; see `plugins`.
+    pub fn plugins(&self) -> PathBuf {
+        self.data.join("plugins")
+    }
+
+    /// Files a plugin keeps, which outlive updates of the plugin.
+    pub fn plugin_data(&self, id: &str) -> PathBuf {
+        self.data.join("plugin-data").join(id)
+    }
+
+    /// Files a plugin can make again, such as downloads.
+    pub fn plugin_cache(&self, id: &str) -> PathBuf {
+        self.cache.join("plugin-cache").join(id)
+    }
+
+    /// The plugins built into Butter, written out so Python can load them.
+    pub fn bundled_plugins(&self) -> PathBuf {
+        self.cache.join("bundled-plugins")
+    }
+
+    /// Butter's `butter` Python module, which plugins import.
+    pub fn python_sdk(&self) -> PathBuf {
+        self.cache.join("python-sdk")
+    }
+
+    /// A plugin's settings and shortcuts.
+    pub fn plugin_state(&self, id: &str) -> PathBuf {
+        self.config.join("plugins").join(format!("{id}.toml"))
+    }
+
     pub fn settings_file(&self) -> PathBuf {
         self.config.join("settings.toml")
     }

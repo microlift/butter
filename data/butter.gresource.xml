@@ -3,6 +3,7 @@
   <!-- GTK looks themed icons up under <prefix>/<size>/<context>/<name>.svg
        for each resource path added to the icon theme; see src/icons.rs. -->
   <gresource prefix="/io/github/microlift/Butter/icons">
+    <file>scalable/ui/application-x-addon-symbolic.svg</file>
     <file>scalable/ui/application-x-executable-symbolic.svg</file>
     <file>scalable/ui/application-x-executable.svg</file>
     <file>scalable/ui/applications-games-symbolic.svg</file>

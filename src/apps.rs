@@ -272,7 +272,7 @@ fn from_info(
 }
 
 /// RFC 3986: a letter, then letters, digits, `+`, `-` and `.`.
-fn valid_scheme(scheme: &str) -> bool {
+pub(crate) fn valid_scheme(scheme: &str) -> bool {
     scheme.starts_with(|c: char| c.is_ascii_alphabetic())
         && scheme
             .chars()
@@ -281,7 +281,7 @@ fn valid_scheme(scheme: &str) -> bool {
 
 /// A concrete `type/subtype`. Wildcards and the catch-all binary type would
 /// make the app the handler of everything.
-fn valid_mime_type(mime: &str) -> bool {
+pub(crate) fn valid_mime_type(mime: &str) -> bool {
     let Some((kind, sub)) = mime.split_once('/') else {
         return false;
     };

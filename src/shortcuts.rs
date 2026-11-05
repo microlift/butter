@@ -32,38 +32,116 @@ const REQUEST: &str = "org.freedesktop.portal.Request";
 const FALLBACK_ICON: &[u8] =
     include_bytes!("../data/icons/hicolor/scalable/apps/io.github.microlift.butter.svg");
 
-/// A shortcut to make.
+/// A shortcut to make: to a bottle's application, or to a plugin's action.
 #[derive(Debug, Clone)]
 pub struct Shortcut {
-    pub bottle: String,
-    pub bottle_name: String,
+    /// The desktop file id.
+    pub id: String,
     pub name: String,
-    pub target: PathBuf,
+    pub comment: String,
+    /// Butter's arguments; `%U` follows them.
     pub args: Vec<String>,
-    pub backend: Backend,
-    /// What the bundle opens, and its category.
-    pub app: App,
-    /// The icon, a PNG.
+    /// Freedesktop categories, such as `Game;`.
+    pub categories: String,
+    /// What it opens: MIME types, and `x-scheme-handler/` types for links.
+    pub types: Vec<String>,
+    /// The icon, a PNG or SVG.
     pub icon: Option<PathBuf>,
+    /// An `X-Butter-…` key naming what it belongs to, and its value.
+    pub owner: (&'static str, String),
 }
 
 impl Shortcut {
+    /// A shortcut to `target` in the bottle `bottle`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_app(
+        bottle: &str,
+        bottle_name: &str,
+        name: &str,
+        target: &Path,
+        args: &[String],
+        backend: Backend,
+        app: &App,
+        icon: Option<PathBuf>,
+    ) -> Shortcut {
+        let mut argv = vec![RUN_FLAG.to_string(), bottle.to_string()];
+        if backend != Backend::Auto {
+            argv.extend(["--backend".into(), backend_name(backend).into()]);
+        }
+        for arg in args {
+            argv.extend(["--arg".into(), arg.clone()]);
+        }
+        argv.push(target.display().to_string());
+        Shortcut {
+            id: desktop_id(bottle, target),
+            name: name.to_string(),
+            comment: format!("Run in the {bottle_name} bottle with Rosemary"),
+            args: argv,
+            categories: app.categories().to_string(),
+            types: app.handled_types(),
+            icon,
+            owner: ("X-Butter-Bottle", bottle.to_string()),
+        }
+    }
+
+    /// A shortcut to `plugin`'s `action`, opening the links of `schemes`
+    /// and the files of `mime_types`. Invalid ones are left out.
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_plugin(
+        plugin: &str,
+        action: &str,
+        name: &str,
+        comment: &str,
+        schemes: &[String],
+        mime_types: &[String],
+        categories: &str,
+        icon: Option<PathBuf>,
+    ) -> Shortcut {
+        let mut types: Vec<String> = mime_types
+            .iter()
+            .filter(|t| crate::apps::valid_mime_type(t))
+            .cloned()
+            .collect();
+        types.extend(
+            schemes
+                .iter()
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| crate::apps::valid_scheme(s) && s != "file")
+                .map(|s| format!("x-scheme-handler/{s}")),
+        );
+        let categories: String = categories
+            .split(';')
+            .map(str::trim)
+            .filter(|c| !c.is_empty() && c.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+            .map(|c| format!("{c};"))
+            .collect();
+        Shortcut {
+            id: crate::plugins::desktop_id(plugin, action),
+            name: name.to_string(),
+            comment: comment.to_string(),
+            args: vec![
+                crate::plugins::FLAG.to_string(),
+                plugin.to_string(),
+                action.to_string(),
+            ],
+            categories,
+            types,
+            icon,
+            owner: ("X-Butter-Plugin", plugin.to_string()),
+        }
+    }
+
     pub fn id(&self) -> String {
-        desktop_id(&self.bottle, &self.target)
+        self.id.clone()
     }
 
     /// The desktop entry. The portal sets `Name=` and `Icon=` itself, so
     /// they are only written for a shortcut Butter installs on its own.
     fn desktop_entry(&self, program: &str, icon: Option<&Path>) -> String {
-        let mut argv = vec![program.to_string(), RUN_FLAG.into(), self.bottle.clone()];
-        if self.backend != Backend::Auto {
-            argv.extend(["--backend".into(), backend_name(self.backend).into()]);
-        }
-        for arg in &self.args {
-            argv.extend(["--arg".into(), arg.clone()]);
-        }
-        argv.push(self.target.display().to_string());
-        let mut exec: Vec<String> = argv.iter().map(|a| quote_exec_arg(a)).collect();
+        let mut exec: Vec<String> = std::iter::once(program)
+            .chain(self.args.iter().map(String::as_str))
+            .map(quote_exec_arg)
+            .collect();
         exec.push("%U".into());
 
         let mut entry = String::from("[Desktop Entry]\nType=Application\n");
@@ -71,25 +149,20 @@ impl Shortcut {
             entry.push_str(&format!("{key}={}\n", escape_value(value)));
         };
         line("Name", &self.name);
-        line(
-            "Comment",
-            &format!("Run in the {} bottle with Rosemary", self.bottle_name),
-        );
+        line("Comment", &self.comment);
         line("Exec", &exec.join(" "));
         if let Some(icon) = icon {
             line("Icon", &icon.display().to_string());
         }
         line("Terminal", "false");
         line("StartupNotify", "false");
-        let categories = self.app.categories();
-        if !categories.is_empty() {
-            line("Categories", categories);
+        if !self.categories.is_empty() {
+            line("Categories", &self.categories);
         }
-        let types = self.app.handled_types();
-        if !types.is_empty() {
-            line("MimeType", &format!("{};", types.join(";")));
+        if !self.types.is_empty() {
+            line("MimeType", &format!("{};", self.types.join(";")));
         }
-        line("X-Butter-Bottle", &self.bottle);
+        line(self.owner.0, &self.owner.1);
         entry
     }
 
@@ -99,6 +172,15 @@ impl Shortcut {
             .and_then(|path| std::fs::read(path).ok())
             .map(glib::Bytes::from_owned)
             .unwrap_or_else(|| glib::Bytes::from_static(FALLBACK_ICON))
+    }
+
+    /// The extension of its icon file, for a shortcut Butter writes itself.
+    fn icon_extension(&self) -> &'static str {
+        match self.icon.as_deref().and_then(Path::extension) {
+            Some(ext) if ext.eq_ignore_ascii_case("svg") => "svg",
+            Some(_) => "png",
+            None => "svg",
+        }
     }
 }
 
@@ -448,14 +530,9 @@ fn applications_dir() -> PathBuf {
 fn install_files(shortcut: &Shortcut) -> anyhow::Result<()> {
     let id = shortcut.id();
     let stem = id.trim_end_matches(".desktop");
-    let icon = Paths::get().shortcut_icons().join(format!(
-        "{stem}.{}",
-        if shortcut.icon.is_some() {
-            "png"
-        } else {
-            "svg"
-        }
-    ));
+    let icon = Paths::get()
+        .shortcut_icons()
+        .join(format!("{stem}.{}", shortcut.icon_extension()));
     std::fs::create_dir_all(icon.parent().context("icon folder")?)?;
     crate::util::write_atomic(&icon, &shortcut.icon_bytes())?;
     let dir = applications_dir();
@@ -582,21 +659,22 @@ mod tests {
 
     #[test]
     fn desktop_entry() {
-        let shortcut = Shortcut {
-            bottle: "games".into(),
-            bottle_name: "Games".into(),
-            name: "Foo".into(),
-            target: "/d/My Foo.app".into(),
-            args: vec!["-x".into()],
-            backend: Backend::Native,
-            app: App {
-                category: Some("public.app-category.games".into()),
-                schemes: vec!["foo".into()],
-                mime_types: vec!["image/png".into()],
-                ..App::default()
-            },
-            icon: None,
+        let app = App {
+            category: Some("public.app-category.games".into()),
+            schemes: vec!["foo".into()],
+            mime_types: vec!["image/png".into()],
+            ..App::default()
         };
+        let shortcut = Shortcut::for_app(
+            "games",
+            "Games",
+            "Foo",
+            Path::new("/d/My Foo.app"),
+            &["-x".into()],
+            Backend::Native,
+            &app,
+            None,
+        );
         let entry = shortcut.desktop_entry("/usr/bin/butter", None);
         assert!(entry.starts_with("[Desktop Entry]\n"));
         assert!(entry.contains(
@@ -609,5 +687,43 @@ mod tests {
         assert!(id.starts_with("io.github.microlift.butter.games.app_"));
         assert!(id.ends_with(".desktop"));
         assert_eq!(id, desktop_id("games", Path::new("/d/My Foo.app")));
+        assert!(entry.contains("\nX-Butter-Bottle=games\n"));
+    }
+
+    #[test]
+    fn plugin_desktop_entry() {
+        let shortcut = Shortcut::for_plugin(
+            "roblox",
+            "player",
+            "Roblox",
+            "Start Roblox",
+            &[
+                "roblox-player".into(),
+                "Roblox".into(),
+                "bad scheme".into(),
+                "file".into(),
+            ],
+            &["image/*".into(), "text/x-lua".into()],
+            "Game;;Bad Category;",
+            Some("/x/icon.svg".into()),
+        );
+        let entry = shortcut.desktop_entry("/usr/bin/butter", None);
+        assert!(
+            entry.contains("\nExec=/usr/bin/butter --plugin roblox player %U\n"),
+            "{entry}"
+        );
+        assert!(
+            entry.contains(
+                "\nMimeType=text/x-lua;x-scheme-handler/roblox-player;x-scheme-handler/roblox;\n"
+            ),
+            "{entry}"
+        );
+        assert!(entry.contains("\nCategories=Game;\n"), "{entry}");
+        assert!(entry.contains("\nX-Butter-Plugin=roblox\n"));
+        assert_eq!(shortcut.icon_extension(), "svg");
+        assert_eq!(
+            shortcut.id(),
+            "io.github.microlift.butter.plugin_roblox.player.desktop"
+        );
     }
 }

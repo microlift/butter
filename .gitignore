@@ -4,3 +4,4 @@
 /build-dir
 /repo
 /result
+__pycache__/

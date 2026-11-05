@@ -6,6 +6,7 @@ mod gpu;
 mod icons;
 mod markdown;
 mod permissions;
+mod plugins;
 mod process;
 mod procs;
 mod runner;
@@ -76,14 +77,15 @@ fn main() -> glib::ExitCode {
             .skip(1)
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        match shortcuts::Launch::parse(&args) {
-            Ok(Some(launch)) => {
-                // Made, but not shown, when Butter was not already open.
-                let window =
-                    ui::window::Window::current().unwrap_or_else(|| ui::window::Window::new(app));
-                window.run_shortcut(&launch);
-            }
-            Ok(None) => app.activate(),
+        // Made, but not shown, when Butter was not already open.
+        let window =
+            || ui::window::Window::current().unwrap_or_else(|| ui::window::Window::new(app));
+        let parsed = shortcuts::Launch::parse(&args)
+            .and_then(|launch| Ok((launch, plugins::Invocation::parse(&args)?)));
+        match parsed {
+            Ok((Some(launch), _)) => window().run_shortcut(&launch),
+            Ok((None, Some(invocation))) => window().run_plugin(&invocation),
+            Ok((None, None)) => app.activate(),
             Err(e) => {
                 eprintln!("butter: {e}");
                 return glib::ExitCode::FAILURE;

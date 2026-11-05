@@ -139,6 +139,9 @@ impl BottlePage {
         });
 
         content.add(&this.programs_group());
+        if let Some(group) = this.plugins_group() {
+            content.add(&group);
+        }
         content.add(&this.runtime_group());
         content.add(&this.graphics_group());
         content.add(&this.display_group());
@@ -261,6 +264,57 @@ impl BottlePage {
         group.set_header_suffix(Some(&buttons));
         group.add(&self.0.programs);
         group
+    }
+
+    /// The actions plugins offer in bottles, if any plugin does.
+    fn plugins_group(&self) -> Option<adw::PreferencesGroup> {
+        let disabled = self.window().settings().disabled_plugins;
+        let mut rows = Vec::new();
+        for plugin in crate::plugins::discover().plugins {
+            if disabled.iter().any(|id| id == plugin.id()) {
+                continue;
+            }
+            for action in &plugin.manifest.actions {
+                if action.scope != crate::plugins::Scope::Bottle || action.hidden {
+                    continue;
+                }
+                let row = adw::ActionRow::builder()
+                    .title(glib::markup_escape_text(&action.title))
+                    .subtitle(glib::markup_escape_text(&format!(
+                        "{} · {}",
+                        plugin.name(),
+                        action.subtitle
+                    )))
+                    .build();
+                let run = ui::icon_button("media-playback-start-symbolic", "Run");
+                row.add_suffix(&run);
+                row.set_activatable_widget(Some(&run));
+                let (weak, p, id) = (self.weak(), plugin.clone(), action.id.clone());
+                run.connect_clicked(move |_| {
+                    let Some(inner) = weak.upgrade() else { return };
+                    let this = BottlePage(inner);
+                    let (p, id) = (p.clone(), id.clone());
+                    glib::spawn_future_local(async move {
+                        let window = this.window().clone();
+                        ui::plugins::run(&window, &p, &id, Some(this.bottle()), Vec::new()).await;
+                        // The plugin may have installed applications.
+                        this.rescan();
+                    });
+                });
+                rows.push(row);
+            }
+        }
+        if rows.is_empty() {
+            return None;
+        }
+        let group = adw::PreferencesGroup::builder()
+            .title("Plugins")
+            .description("Actions plugins offer for this bottle")
+            .build();
+        for row in rows {
+            group.add(&row);
+        }
+        Some(group)
     }
 
     /// Follow the folders applications are installed in, so new ones show
@@ -517,16 +571,16 @@ impl BottlePage {
     async fn create_shortcut(&self, entry: &Entry) {
         let Some(app) = entry.app.clone() else { return };
         let bottle = self.bottle();
-        let shortcut = shortcuts::Shortcut {
-            bottle: bottle.id.clone(),
-            bottle_name: bottle.config.name.clone(),
-            name: entry.program.name.clone(),
-            target: entry.program.path.clone(),
-            args: entry.program.args.clone(),
-            backend: entry.program.backend,
-            icon: app.icon_png.clone(),
-            app,
-        };
+        let shortcut = shortcuts::Shortcut::for_app(
+            &bottle.id,
+            &bottle.config.name,
+            &entry.program.name,
+            &entry.program.path,
+            &entry.program.args,
+            entry.program.backend,
+            &app,
+            app.icon_png.clone(),
+        );
         match shortcuts::install(&shortcut).await {
             Ok(Some(name)) => {
                 let id = shortcut.id();

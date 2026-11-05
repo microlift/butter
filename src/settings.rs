@@ -23,6 +23,10 @@ pub struct Settings {
     /// Whether the Getting Started tour has been offered, which it is once,
     /// on first launch.
     pub tutorial_seen: bool,
+    /// A Python to run plugins with instead of `python3` on the `PATH`.
+    pub python: Option<String>,
+    /// Ids of the plugins the user switched off.
+    pub disabled_plugins: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +67,8 @@ impl Default for Settings {
             build_profile: BuildProfile::default(),
             checked_system_runner: false,
             tutorial_seen: false,
+            python: None,
+            disabled_plugins: Vec::new(),
         }
     }
 }

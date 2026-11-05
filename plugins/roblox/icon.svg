@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- Butter's own drawing for its Roblox plugin: building blocks. -->
+  <rect x="8" y="8" width="112" height="112" rx="24" fill="#3d3846"/>
+  <rect x="24" y="64" width="36" height="36" rx="6" fill="#e66100"/>
+  <rect x="68" y="64" width="36" height="36" rx="6" fill="#f6d32d"/>
+  <rect x="46" y="24" width="36" height="36" rx="6" fill="#62a0ea"/>
+  <path d="M58 34 l14 8 -14 8 z" fill="#ffffff"/>
+</svg>
