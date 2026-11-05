@@ -87,6 +87,10 @@ const BUNDLED: &[(&str, Files)] = &[(
             "roblox_install.py",
             include_bytes!("../plugins/roblox/roblox_install.py"),
         ),
+        (
+            "roblox_rpc.py",
+            include_bytes!("../plugins/roblox/roblox_rpc.py"),
+        ),
         ("icon.svg", include_bytes!("../plugins/roblox/icon.svg")),
     ],
 )];

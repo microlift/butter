@@ -22,6 +22,7 @@ import butter  # noqa: E402
 import plugin  # noqa: E402
 import roblox_deploy as deploy  # noqa: E402
 import roblox_install as rbx  # noqa: E402
+import roblox_rpc  # noqa: E402
 
 
 class DeployTests(unittest.TestCase):
@@ -436,6 +437,118 @@ class PluginTests(unittest.TestCase):
         with self.assertRaises(butter.PluginError) as e:
             butter._actions["player"](self.ctx("player"))
         self.assertIn("no prefix", str(e.exception))
+
+    def test_discord_rich_presence_starts_with_the_player_only(self):
+        self.fake.add_bottle("rb", "Roblox")
+        self.fake.settings["bottle"] = "rb"
+        started = []
+        original = roblox_rpc.start
+        roblox_rpc.start = lambda ctx, required=False: started.append(ctx.action)
+        try:
+            butter._actions["player"](self.ctx("player", discord_rpc=False))
+            self.assertEqual(started, [])
+            butter._actions["player"](self.ctx("player"))
+            self.assertEqual(started, ["player"])
+            butter._actions["studio"](self.ctx("studio", discord_rpc=True))
+            self.assertEqual(started, ["player"])
+        finally:
+            roblox_rpc.start = original
+
+
+class RoserpcTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.running = roblox_rpc.running
+        roblox_rpc.running = lambda: []
+
+    def tearDown(self):
+        roblox_rpc.running = self.running
+        self.tmp.cleanup()
+
+    def ctx(self, command):
+        request = {
+            "action": "discord",
+            "plugin": {
+                "id": "roblox",
+                "name": "Roblox",
+                "dir": str(HERE.parent),
+                "data_dir": str(self.root / "data"),
+                "cache_dir": str(self.root / "cache"),
+            },
+            "settings": {"roserpc_command": command},
+            "host": {"arch": "x86_64"},
+        }
+        self.channel = Channel(Fake(self.root))
+        return butter.Context(request, self.channel)
+
+    def logged(self):
+        return "\n".join(m["text"] for m in self.channel.sent if m["t"] == "log")
+
+    def script(self, body):
+        path = self.root / "fake roserpc"
+        path.write_text("#!/bin/sh\n" + body)
+        path.chmod(0o755)
+        return path
+
+    def test_recognises_roserpc_command_lines(self):
+        self.assertTrue(roblox_rpc.is_roserpc([b"/home/u/.local/bin/roserpc"]))
+        self.assertTrue(roblox_rpc.is_roserpc([b"python3.12", b"-I", b"-m", b"roserpc", b"-v"]))
+        self.assertFalse(roblox_rpc.is_roserpc([b"vim", b"/home/u/roserpc"]))
+        self.assertFalse(roblox_rpc.is_roserpc([b"python3", b"-m", b"roserpcx"]))
+        self.assertFalse(roblox_rpc.is_roserpc([]))
+
+    def test_finds_running_roserpc_in_proc(self):
+        proc = self.root / "proc"
+        for pid, cmdline in [("10", b"/x/roserpc\0"), ("11", b"bash\0"), ("self", b"")]:
+            (proc / pid).mkdir(parents=True)
+            (proc / pid / "cmdline").write_bytes(cmdline)
+        self.assertEqual(self.running(proc), [10])
+
+    def test_configured_command_is_split_and_expanded(self):
+        self.assertEqual(
+            roblox_rpc.find_command("~/rpc/bin/roserpc --hide-menu"),
+            [str(Path("~/rpc/bin/roserpc").expanduser()), "--hide-menu"],
+        )
+
+    def test_starts_roserpc_and_leaves_it_running(self):
+        pidfile = self.root / "pid"
+        script = self.script(f"echo $$ > '{pidfile}'\necho started\nexec sleep 30\n")
+        message = roblox_rpc.start(self.ctx(f"'{script}' -v"), required=True)
+        self.assertEqual(message, "Discord Rich Presence is on")
+        pid = int(pidfile.read_text())
+        try:
+            self.assertEqual(os.getsid(pid), pid)
+            log = (self.root / "data" / roblox_rpc.LOG_NAME).read_text()
+            self.assertIn("started", log)
+        finally:
+            os.kill(pid, 9)
+
+    def test_roserpc_that_exits_at_once_is_reported(self):
+        script = self.script("echo 'roserpc needs Python 3.10'\nexit 3\n")
+        with self.assertRaises(butter.PluginError) as e:
+            roblox_rpc.start(self.ctx(f"'{script}'"), required=True)
+        self.assertIn("exit code 3", str(e.exception))
+        self.assertIn("needs Python 3.10", self.logged())
+        # Starting with Roblox only logs it, so Roblox still starts.
+        self.assertIsNone(roblox_rpc.start(self.ctx(f"'{script}'")))
+
+    def test_already_running_roserpc_is_left_alone(self):
+        roblox_rpc.running = lambda: [42]
+        script = self.script(f"touch '{self.root / 'ran'}'\n")
+        message = roblox_rpc.start(self.ctx(f"'{script}'"), required=True)
+        self.assertEqual(message, "Discord Rich Presence is already on")
+        self.assertFalse((self.root / "ran").exists())
+
+    def test_missing_roserpc_is_explained(self):
+        original = roblox_rpc.find_command
+        roblox_rpc.find_command = lambda configured="": None
+        try:
+            with self.assertRaises(butter.PluginError) as e:
+                roblox_rpc.start(self.ctx(""), required=True)
+            self.assertIn("roserpc was not found", str(e.exception))
+        finally:
+            roblox_rpc.find_command = original
 
 
 if __name__ == "__main__":
