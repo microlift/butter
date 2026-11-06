@@ -19,6 +19,11 @@ finish-args:
   - --socket=fallback-x11
   - --socket=pulseaudio
   - --device=dri
+  # Discord's IPC socket, for roserpc's Rich Presence: the native client's,
+  # and where the Flatpak Discord and Vesktop put theirs.
+  - --filesystem=xdg-run/discord-ipc-0
+  - --filesystem=xdg-run/app/com.discordapp.Discord:create
+  - --filesystem=xdg-run/app/dev.vencord.Vesktop:create
 
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
@@ -45,6 +50,21 @@ modules:
       - type: archive
         url: https://download.gnome.org/sources/vte/0.84/vte-0.84.1.tar.xz
         sha256: aca1caa8478aebcdbb1d67897fb3511eb7601debae6810e16a15b6fa25f31ac8
+
+  # roserpc shows the Roblox game being played on Discord. The Roblox plugin
+  # starts it; it is plain Python, run by the runtime's python3.
+  - name: roserpc
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/share/roserpc /app/bin
+      - cp -r roserpc /app/share/roserpc/
+      - install -Dm644 LICENSE /app/share/licenses/roserpc/LICENSE
+      - printf '#!/bin/sh\nPYTHONPATH=/app/share/roserpc exec python3 -m roserpc "$@"\n' > /app/bin/roserpc
+      - chmod 755 /app/bin/roserpc
+    sources:
+      - type: git
+        url: https://github.com/st1rynight/roserpc.git
+        commit: 488a6506d81937188320ade5781ebd5c36e944f3
 
   - name: butter
     buildsystem: simple

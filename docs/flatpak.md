@@ -34,6 +34,11 @@ Some optional features need more. When Butter first starts, it asks which
 ones you want, then shows the commented `flatpak override` command that
 allows exactly what they need. Run it in a terminal and restart Butter.
 
+The Flatpak includes [roserpc](https://github.com/st1rynight/roserpc), which
+the Roblox plugin starts with Roblox to show the game on Discord. For that it
+can reach Discord's IPC socket (`xdg-run/discord-ipc-0`, and the folders the
+Flatpak Discord and Vesktop keep theirs in) without an override.
+
 Shortcuts are made through the Dynamic Launcher portal, which needs no
 extra permission. A shortcut can only open the files Butter can reach, so to
 open documents from your file manager with a bottle's application, let

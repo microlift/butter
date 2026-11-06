@@ -7,7 +7,8 @@
   ``roblox-studio:`` and ``roblox-studio-auth:`` links the website opens.
 * **Launch Roblox** and **Launch Roblox Studio** update the app if a newer
   version is out, write its FastFlags, apply mods, and start it with the
-  link that launched it, if any.
+  link that launched it, if any. With Discord Rich Presence on (the
+  default), Launch Roblox also starts roserpc, which shows the game on Discord.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from typing import List, Optional
 
 import butter
 import roblox_install as rbx
+import roblox_rpc
 from roblox_deploy import COMPONENTS, PLAYER, STUDIO, Component, component_for_link
 
 BOTTLE_NAME = "Roblox"
@@ -89,6 +91,8 @@ def launch(ctx: butter.Context, component: Component) -> str:
         update=bool(ctx.setting("update_on_launch", True)),
     )
     app = rbx.prepare(ctx, bottle, component)
+    if component is PLAYER and ctx.setting("discord_rpc", True):
+        roblox_rpc.start(ctx)
     ctx.launch(bottle, app, open=links, name=component.title)
     return f"Starting {component.title}"
 
@@ -151,6 +155,11 @@ def update(ctx: butter.Context) -> str:
         else:
             lines.append(f"{component.title} was updated to {after}")
     return "; ".join(lines)
+
+
+@butter.action("discord")
+def discord(ctx: butter.Context) -> str:
+    return roblox_rpc.start(ctx, required=True)
 
 
 @butter.action("reinstall")
