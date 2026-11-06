@@ -116,7 +116,7 @@ default = true
 [[settings]]
 key = "discord_rpc"
 title = "Discord Rich Presence"
-subtitle = "Start roserpc with Roblox, so Discord shows the game you're playing"
+subtitle = "Start roserpc with Roblox, so Discord shows the game you're playing. It stops when Butter quits"
 type = "bool"
 default = true
 

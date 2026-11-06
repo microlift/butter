@@ -91,6 +91,10 @@ const BUNDLED: &[(&str, Files)] = &[(
             "roblox_rpc.py",
             include_bytes!("../plugins/roblox/roblox_rpc.py"),
         ),
+        (
+            "roserpc_keeper.py",
+            include_bytes!("../plugins/roblox/roserpc_keeper.py"),
+        ),
         ("icon.svg", include_bytes!("../plugins/roblox/icon.svg")),
     ],
 )];

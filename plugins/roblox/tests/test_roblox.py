@@ -8,8 +8,10 @@ import os
 import plistlib
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -199,6 +201,10 @@ class PluginTests(unittest.TestCase):
             "fflags_player": "{}",
             "fflags_studio": "{}",
             "mods": True,
+            # On in plugin.toml; off here so launching never starts a real
+            # roserpc.
+            "discord_rpc": False,
+            "roserpc_command": "",
         }
 
     def tearDown(self):
@@ -438,6 +444,11 @@ class PluginTests(unittest.TestCase):
             butter._actions["player"](self.ctx("player"))
         self.assertIn("no prefix", str(e.exception))
 
+    def test_discord_rich_presence_is_on_by_default(self):
+        manifest = (HERE.parent / "plugin.toml").read_text()
+        setting = manifest.split('key = "discord_rpc"')[1].split("[[settings]]")[0]
+        self.assertIn("default = true", setting)
+
     def test_discord_rich_presence_starts_with_the_player_only(self):
         self.fake.add_bottle("rb", "Roblox")
         self.fake.settings["bottle"] = "rb"
@@ -445,9 +456,9 @@ class PluginTests(unittest.TestCase):
         original = roblox_rpc.start
         roblox_rpc.start = lambda ctx, required=False: started.append(ctx.action)
         try:
-            butter._actions["player"](self.ctx("player", discord_rpc=False))
-            self.assertEqual(started, [])
             butter._actions["player"](self.ctx("player"))
+            self.assertEqual(started, [])
+            butter._actions["player"](self.ctx("player", discord_rpc=True))
             self.assertEqual(started, ["player"])
             butter._actions["studio"](self.ctx("studio", discord_rpc=True))
             self.assertEqual(started, ["player"])
@@ -461,10 +472,29 @@ class RoserpcTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.running = roblox_rpc.running
         roblox_rpc.running = lambda: []
+        # Stands in for Butter, whose exit stops roserpc.
+        self.butter = subprocess.Popen(["sleep", "60"])
+        self.butter_pidfd = roblox_rpc.butter_pidfd
+        roblox_rpc.butter_pidfd = lambda: os.pidfd_open(self.butter.pid)
 
     def tearDown(self):
         roblox_rpc.running = self.running
+        roblox_rpc.butter_pidfd = self.butter_pidfd
+        self.butter.kill()
+        self.butter.wait()
         self.tmp.cleanup()
+
+    def gone(self, pid, timeout=10.0):
+        """Whether ``pid`` ends within ``timeout`` seconds."""
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
 
     def ctx(self, command):
         request = {
@@ -511,18 +541,36 @@ class RoserpcTests(unittest.TestCase):
             [str(Path("~/rpc/bin/roserpc").expanduser()), "--hide-menu"],
         )
 
-    def test_starts_roserpc_and_leaves_it_running(self):
+    def start_sleeper(self):
+        """Start a fake roserpc that runs until stopped; returns its pid."""
         pidfile = self.root / "pid"
         script = self.script(f"echo $$ > '{pidfile}'\necho started\nexec sleep 30\n")
         message = roblox_rpc.start(self.ctx(f"'{script}' -v"), required=True)
         self.assertEqual(message, "Discord Rich Presence is on")
         pid = int(pidfile.read_text())
-        try:
-            self.assertEqual(os.getsid(pid), pid)
-            log = (self.root / "data" / roblox_rpc.LOG_NAME).read_text()
-            self.assertIn("started", log)
-        finally:
-            os.kill(pid, 9)
+        self.addCleanup(lambda: self.gone(pid, 0) or os.kill(pid, 9))
+        return pid
+
+    def test_starts_roserpc_outside_the_action(self):
+        pid = self.start_sleeper()
+        self.assertNotEqual(os.getsid(pid), os.getsid(0))
+        log = (self.root / "data" / roblox_rpc.LOG_NAME).read_text()
+        self.assertIn("started", log)
+        self.assertFalse(self.gone(pid, 0.3))
+
+    def test_roserpc_stops_when_butter_exits(self):
+        pid = self.start_sleeper()
+        self.butter.kill()
+        self.butter.wait()
+        self.assertTrue(self.gone(pid))
+        log = (self.root / "data" / roblox_rpc.LOG_NAME).read_text()
+        self.assertIn("Butter exited; stopping roserpc", log)
+
+    def test_without_pidfds_roserpc_runs_on_its_own(self):
+        roblox_rpc.butter_pidfd = lambda: None
+        pid = self.start_sleeper()
+        self.assertEqual(os.getsid(pid), pid)
+        self.assertIn("keep running after Butter quits", self.logged())
 
     def test_roserpc_that_exits_at_once_is_reported(self):
         script = self.script("echo 'roserpc needs Python 3.10'\nexit 3\n")

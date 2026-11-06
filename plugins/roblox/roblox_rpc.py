@@ -3,8 +3,10 @@
 roserpc (https://github.com/st1rynight/roserpc) is a separate program: it
 finds the RobloxPlayer that Rosemary runs, follows its log inside the
 prefix Butter set with ``ROSEMARY_PREFIX``, and tells Discord what is being
-played. This module only finds it and starts it once; roserpc then idles
-while Roblox is closed and leaves Discord alone.
+played. This module finds it and starts it under roserpc_keeper.py, which
+stops it when Butter exits: when its window is closed, or, started from a
+link, once Roblox ends. Until then roserpc idles while Roblox is closed and
+leaves Discord alone.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Iterable, List, Optional
 
@@ -22,6 +25,7 @@ NAME = "roserpc"
 # Where the README installs it: the AppImage, then the git checkout.
 LOCATIONS = ("~/.local/bin/roserpc", "~/roserpc/bin/roserpc")
 LOG_NAME = "roserpc.log"
+KEEPER = "roserpc_keeper.py"
 # A roserpc that fails to start (no Python, a bad option) exits at once;
 # waiting this long catches that without slowing every launch.
 START_GRACE = 1.0
@@ -74,6 +78,21 @@ def running(proc: Path = Path("/proc")) -> List[int]:
     return found
 
 
+def butter_pidfd() -> Optional[int]:
+    """A pidfd of Butter, which runs each action as a child, or None where
+    pidfds are missing (Linux before 5.3) or Butter is already gone."""
+    parent = os.getppid()
+    try:
+        fd = os.pidfd_open(parent)
+    except (AttributeError, OSError):
+        return None
+    # Reparented in between: the pid opened may not be Butter's.
+    if os.getppid() != parent:
+        os.close(fd)
+        return None
+    return fd
+
+
 def _tail(path: Path, lines: int = LOG_TAIL_LINES) -> Iterable[str]:
     try:
         return path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
@@ -109,13 +128,21 @@ def start(ctx: butter.Context, required: bool = False) -> Optional[str]:
     ctx.plugin.data_dir.mkdir(parents=True, exist_ok=True)
     log_path = ctx.plugin.data_dir / LOG_NAME
     ctx.log(f"Starting {shlex.join(command)}; its log is {log_path}")
+    butter_fd = butter_pidfd()
+    if butter_fd is None:
+        ctx.log("roserpc will keep running after Butter quits: this system has no pidfds")
+        args, keep = command, ()
+    else:
+        keeper = [sys.executable, "-I", str(ctx.plugin.dir / KEEPER), str(butter_fd)]
+        args, keep = keeper + command, (butter_fd,)
     try:
         with open(log_path, "ab") as log:
             # A session of its own, so it outlives this action and cancelling
             # another action never reaches it. Its output stays out of the
             # action's log, which Butter waits on until it is closed.
             process = subprocess.Popen(
-                command,
+                args,
+                pass_fds=keep,
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,
@@ -124,8 +151,11 @@ def start(ctx: butter.Context, required: bool = False) -> Optional[str]:
                 start_new_session=True,
             )
     except OSError as e:
-        fail(f"could not start {command[0]}: {e}")
+        fail(f"could not start {args[0]}: {e}")
         return None
+    finally:
+        if butter_fd is not None:
+            os.close(butter_fd)
     try:
         code = process.wait(timeout=START_GRACE)
     except subprocess.TimeoutExpired:
