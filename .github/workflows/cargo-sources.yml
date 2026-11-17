@@ -33,21 +33,24 @@ jobs:
       - name: Trust the workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      # - name: Check whether Cargo.toml or Cargo.lock changed
-      #   id: changes
-      #   env:
-      #     BEFORE: ${{ github.event.before }}
-      #   run: |
-      #     if [ -z "$BEFORE" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-      #       echo "cargo=true" >> "$GITHUB_OUTPUT"
-      #     elif git diff --quiet "$BEFORE" HEAD -- Cargo.toml Cargo.lock; then
-      #       echo "cargo=false" >> "$GITHUB_OUTPUT"
-      #     else
-      #       echo "cargo=true" >> "$GITHUB_OUTPUT"
-      #     fi
+      - name: Check whether cargo-sources.json needs regenerating
+        id: changes
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ ! -f build-aux/cargo-sources.json ]; then
+            echo "cargo-sources.json does not exist yet; generating it"
+            echo "cargo=true" >> "$GITHUB_OUTPUT"
+          elif [ -z "$BEFORE" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "cargo=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BEFORE" HEAD -- Cargo.toml Cargo.lock; then
+            echo "cargo=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "cargo=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Generate cargo-sources.json
-        # if: steps.changes.outputs.cargo == 'true'
+        if: steps.changes.outputs.cargo == 'true'
         run: |
           tools="$RUNNER_TEMP/flatpak-builder-tools"
           git clone --quiet --filter=blob:none https://github.com/flatpak/flatpak-builder-tools.git "$tools"
@@ -56,14 +59,20 @@ jobs:
           python "$tools/cargo/flatpak-cargo-generator.py" Cargo.lock -o build-aux/cargo-sources.json
 
       - name: Commit cargo-sources.json
-        # if: steps.changes.outputs.cargo == 'true'
+        if: steps.changes.outputs.cargo == 'true'
         run: |
+          git add build-aux/cargo-sources.json
+          if git diff --cached --quiet -- build-aux/cargo-sources.json; then
+            echo "cargo-sources.json is already up to date"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "flatpak: update cargo-sources.json" -- build-aux/cargo-sources.json
           git push origin "HEAD:$GITHUB_REF_NAME"
 
       - uses: actions/upload-artifact@v7
+        if: steps.changes.outputs.cargo == 'true'
         with:
           name: cargo-sources
           path: build-aux/cargo-sources.json
