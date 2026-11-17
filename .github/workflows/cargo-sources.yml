@@ -33,18 +33,18 @@ jobs:
       - name: Trust the workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Check whether Cargo.toml or Cargo.lock changed
-        id: changes
-        env:
-          BEFORE: ${{ github.event.before }}
-        run: |
-          if [ -z "$BEFORE" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            echo "cargo=true" >> "$GITHUB_OUTPUT"
-          elif git diff --quiet "$BEFORE" HEAD -- Cargo.toml Cargo.lock; then
-            echo "cargo=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "cargo=true" >> "$GITHUB_OUTPUT"
-          fi
+      # - name: Check whether Cargo.toml or Cargo.lock changed
+      #   id: changes
+      #   env:
+      #     BEFORE: ${{ github.event.before }}
+      #   run: |
+      #     if [ -z "$BEFORE" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+      #       echo "cargo=true" >> "$GITHUB_OUTPUT"
+      #     elif git diff --quiet "$BEFORE" HEAD -- Cargo.toml Cargo.lock; then
+      #       echo "cargo=false" >> "$GITHUB_OUTPUT"
+      #     else
+      #       echo "cargo=true" >> "$GITHUB_OUTPUT"
+      #     fi
 
       - name: Generate cargo-sources.json
         if: steps.changes.outputs.cargo == 'true'
