@@ -51,10 +51,6 @@ modules:
     build-options:
       env:
         CARGO_HOME: /run/build/butter/cargo
-      # Fetches crates while building.
-      # TODO: Use flatpak-cargo-generator for offline builds
-      build-args:
-        - --share=network
     build-commands:
       # vte4-sys finds VTE through pkg-config. Point it at wherever the vte
       # module put its .pc file, and say so if it is not there at all.
@@ -70,7 +66,7 @@ modules:
         # loader's default search path in the sandbox. Bake both locations
         # into the binary's RPATH so libvte-2.91-gtk4 is always found.
         export RUSTFLAGS="$RUSTFLAGS -C link-arg=-Wl,-rpath,/app/lib64 -C link-arg=-Wl,-rpath,/app/lib"
-        cargo build --release --locked
+        cargo --offline build --release --locked
       - make install PREFIX=/app
     sources:
       - type: dir
@@ -79,3 +75,4 @@ modules:
           - target
           - build-dir
           - .flatpak-builder
+      - cargo-sources.json
