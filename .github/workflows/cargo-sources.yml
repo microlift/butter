@@ -56,7 +56,7 @@ jobs:
           python "$tools/cargo/flatpak-cargo-generator.py" Cargo.lock -o build-aux/cargo-sources.json
 
       - name: Commit cargo-sources.json
-        if: steps.changes.outputs.cargo == 'true'
+        # if: steps.changes.outputs.cargo == 'true'
         run: |
           if git diff --quiet -- build-aux/cargo-sources.json; then
             echo "cargo-sources.json is already up to date"
