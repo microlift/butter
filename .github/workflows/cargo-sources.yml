@@ -18,7 +18,7 @@ jobs:
   cargo-sources:
     name: Update cargo-sources.json
     if: ${{ inputs.release || !startsWith(github.event.head_commit.message, 'Release') }}
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     container:
       image: python:3.13
     permissions:
