@@ -82,6 +82,7 @@ choice!(
     /// `ROSEMARY_MENU`
     Menu {
         Default => ("Default", None),
+        Global => ("In the global menu bar", Some("global")),
         Titlebar => ("In the titlebar", Some("titlebar")),
         Strip => ("Below the titlebar", Some("strip")),
         Hidden => ("Hidden", Some("none")),
